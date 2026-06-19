@@ -66,6 +66,22 @@ Start as an MCP server for AI agent integration (VS Code, Claude, Hermes, etc.):
 rdl-tool --mcp
 ```
 
+### Copilot CLI Configuration
+
+Add to `.github/mcp.json` in your project:
+
+```json
+{
+  "servers": {
+    "rdl-toolkit": {
+      "type": "stdio",
+      "command": "SSRS/tools/rdl-tool",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
 ### VS Code Configuration
 
 Add to `.vscode/mcp.json` in your project:
