@@ -82,11 +82,10 @@ func (d *Document) setPageHeaderTextboxValue(textboxName, newTitle string) bool 
 	if tb == nil {
 		return false
 	}
-	for c := tb.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == xmlquery.ElementNode && c.Data == "Value" {
-			setNodeText(c, newTitle)
-			return true
-		}
+	val := xmlquery.FindOne(tb, ".//Value")
+	if val != nil {
+		setNodeText(val, newTitle)
+		return true
 	}
 	// Value missing — create it.
 	xmlquery.AddChild(tb, elementWithText("Value", newTitle))
