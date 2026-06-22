@@ -183,12 +183,63 @@ func setNodeText(n *xmlquery.Node, value string) {
 	xmlquery.AddChild(n, newTextNode(value))
 }
 
+// detectChildIndent returns the indentation string used before the last
+// element child of parent. Falls back to 2 spaces if no suitable text node
+// is found. This lets added elements match the file's existing style.
+func detectChildIndent(parent *xmlquery.Node) string {
+	var lastText *xmlquery.Node
+	for c := parent.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == xmlquery.TextNode {
+			lastText = c
+		}
+		if c.Type == xmlquery.ElementNode && lastText != nil {
+			// Found an element preceded by a text node — extract indent.
+			data := lastText.Data
+			if idx := strings.LastIndexByte(data, '\n'); idx >= 0 {
+				indent := data[idx+1:]
+				if len(indent) > 0 {
+					return indent
+				}
+			}
+		}
+	}
+	return "  "
+}
+
+// detectContainerIndent returns the indentation of the container element itself,
+// by examining the text node before it. Falls back to "" (no indent).
+func detectContainerIndent(container *xmlquery.Node) string {
+	// Walk backwards through siblings to find the text node before this element.
+	for c := container.Parent.FirstChild; c != nil; c = c.NextSibling {
+		if c == container {
+			break
+		}
+		if c.Type == xmlquery.TextNode && c.NextSibling == container {
+			data := c.Data
+			if idx := strings.LastIndexByte(data, '\n'); idx >= 0 {
+				return data[idx+1:]
+			}
+		}
+	}
+	return ""
+}
+
 // appendIndented adds n as the last child of parent, preceded by a newline
-// plus indent (2 spaces per depth). Depth is the parent's depth from the
-// document root.
+// plus indent. Automatically detects the indentation style from existing
+// children, falling back to 2 spaces per depth level.
 func appendIndented(parent, n *xmlquery.Node, depth int) {
-	xmlquery.AddChild(parent, newTextNode("\n"+strings.Repeat("  ", depth+1)))
+	indent := detectChildIndent(parent)
+	xmlquery.AddChild(parent, newTextNode("\n"+indent))
 	xmlquery.AddChild(parent, n)
+}
+
+// appendIndentedWithSuffix adds n as the last child of parent, preceded by a
+// newline + childIndent, and followed by a newline + suffixIndent. This handles
+// the pattern where the closing tag of the parent also needs correct indentation.
+func appendIndentedWithSuffix(parent, n *xmlquery.Node, childIndent, suffixIndent string) {
+	xmlquery.AddChild(parent, newTextNode("\n"+childIndent))
+	xmlquery.AddChild(parent, n)
+	xmlquery.AddChild(parent, newTextNode("\n"+suffixIndent))
 }
 
 // ── Idempotency check ──────────────────────────────────────────────────────

@@ -92,7 +92,7 @@ func (d *Document) addParameter(spec ParameterAdd) {
 	}
 	xmlquery.AddChild(p, elementWithText("Prompt", prompt))
 
-	xmlquery.AddChild(container, newTextNode("\n  "))
-	xmlquery.AddChild(container, p)
-	xmlquery.AddChild(container, newTextNode("\n  "))
+	childIndent := detectChildIndent(container)
+	containerIndent := detectContainerIndent(container)
+	appendIndentedWithSuffix(container, p, childIndent, containerIndent)
 }

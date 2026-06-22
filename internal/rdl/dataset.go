@@ -117,9 +117,9 @@ func (d *Document) ManageDataSets(ops DataSetOps) string {
 		}
 		f := createElement("Field", [2]string{"Name", af.Field})
 		xmlquery.AddChild(f, elementWithText("DataField", af.Field))
-		xmlquery.AddChild(fields, newTextNode("\n      "))
-		xmlquery.AddChild(fields, f)
-		xmlquery.AddChild(fields, newTextNode("\n    "))
+		childIndent := detectChildIndent(fields)
+		parentIndent := detectContainerIndent(fields)
+		appendIndentedWithSuffix(fields, f, childIndent, parentIndent)
 		fmt.Fprintf(&b, "Added field '%s' to DataSet '%s'\n", af.Field, af.DataSet)
 	}
 
@@ -140,18 +140,19 @@ func (d *Document) addDataSet(spec DataSetAdd) error {
 	xmlquery.AddChild(ds, query)
 
 	fields := createElement("Fields")
+	fieldIndent := detectChildIndent(container) + "  "
 	for _, f := range spec.Fields {
 		fld := createElement("Field", [2]string{"Name", f})
 		xmlquery.AddChild(fld, elementWithText("DataField", f))
-		xmlquery.AddChild(fields, newTextNode("\n      "))
+		xmlquery.AddChild(fields, newTextNode("\n"+fieldIndent))
 		xmlquery.AddChild(fields, fld)
 	}
-	xmlquery.AddChild(fields, newTextNode("\n    "))
+	xmlquery.AddChild(fields, newTextNode("\n"+detectChildIndent(container)))
 	xmlquery.AddChild(ds, fields)
 
-	xmlquery.AddChild(container, newTextNode("\n    "))
-	xmlquery.AddChild(container, ds)
-	xmlquery.AddChild(container, newTextNode("\n  "))
+	childIndent := detectChildIndent(container)
+	containerIndent := detectContainerIndent(container)
+	appendIndentedWithSuffix(container, ds, childIndent, containerIndent)
 	return nil
 }
 

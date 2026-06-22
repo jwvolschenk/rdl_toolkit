@@ -104,10 +104,10 @@ func (d *Document) addDataSource(spec DataSourceAdd) error {
 	xmlquery.AddChild(ds, elementWithText("rd:SecurityType", security))
 	xmlquery.AddChild(ds, elementWithText("rd:DataSourceID", newUUID()))
 
-	// Preserve a multi-line indented layout matching the file convention.
-	xmlquery.AddChild(container, newTextNode("\n    "))
-	xmlquery.AddChild(container, ds)
-	xmlquery.AddChild(container, newTextNode("\n  "))
+	// Detect indentation from existing siblings, then add the new element.
+	childIndent := detectChildIndent(container)
+	containerIndent := detectContainerIndent(container)
+	appendIndentedWithSuffix(container, ds, childIndent, containerIndent)
 	return nil
 }
 
