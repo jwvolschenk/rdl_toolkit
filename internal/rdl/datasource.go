@@ -2,95 +2,123 @@ package rdl
 
 import (
 	"fmt"
+	"strings"
+
+	"github.com/antchfx/xmlquery"
 )
 
-// ManageDataSources adds, removes, or renames DataSources.
-func ManageDataSources(path string, adds [][3]string, removes []string, renames [][2]string) (string, error) {
-	doc, err := LoadRDL(path)
+// DataSourceOps bundles all DataSource mutations for a single Manage call.
+// Fields left zero are no-ops. Operations are applied in this order:
+// removes → renames → setConnectStrings → adds.
+type DataSourceOps struct {
+	Remove           []string              `json:"remove,omitempty"`
+	Rename           []RenamePair          `json:"rename,omitempty"`
+	SetConnectString []ConnectStringUpdate `json:"setConnectString,omitempty"`
+	Add              []DataSourceAdd       `json:"add,omitempty"`
+}
+
+// ManageDataSources applies the given operations to the file.
+func ManageDataSources(path string, ops DataSourceOps, dryRun bool) (string, error) {
+	doc, err := Load(path)
 	if err != nil {
 		return "", err
 	}
-
-	summary := ""
-
-	for _, name := range removes {
-		count := removeDataSource(&doc.Content, name)
-		summary += fmt.Sprintf("Removed DataSource '%s' (%d occurrence(s))\n", name, count)
-	}
-
-	for _, pair := range renames {
-		count := renameDataSource(&doc.Content, pair[0], pair[1])
-		summary += fmt.Sprintf("Renamed DataSource '%s' -> '%s' (%d occurrence(s))\n", pair[0], pair[1], count)
-	}
-
-	for _, add := range adds {
-		addDataSource(&doc.Content, add[0], add[1], add[2])
-		summary += fmt.Sprintf("Added DataSource '%s'\n", add[0])
-	}
-
-	if err := doc.Save(path); err != nil {
-		return "", fmt.Errorf("writing file: %w", err)
-	}
-	return summary, nil
+	summary := doc.ManageDataSources(ops)
+	return maybeSave(doc, path, summary, dryRun)
 }
 
-func removeDataSource(data *[]byte, name string) int {
-	count := 0
-	startTag := []byte(fmt.Sprintf(`<DataSource Name="%s">`, name))
-	endTag := []byte("</DataSource>")
+// ManageDataSources applies ops to the document in place, returning a
+// human-readable summary of what changed.
+func (d *Document) ManageDataSources(ops DataSourceOps) string {
+	var b strings.Builder
 
-	for {
-		start := indexByte(*data, startTag)
-		if start == -1 {
-			break
+	for _, name := range ops.Remove {
+		n := d.findNamedElement("DataSource", name)
+		if n == nil {
+			fmt.Fprintf(&b, "Removed DataSource '%s' (not found)\n", name)
+			continue
 		}
-		end := indexByte((*data)[start:], endTag)
-		if end == -1 {
-			break
-		}
-		end += start + len(endTag)
-		if end < len(*data) && (*data)[end] == '\n' {
-			end++
-		}
-		*data = append((*data)[:start], (*data)[end:]...)
-		count++
-	}
-	return count
-}
-
-func renameDataSource(data *[]byte, old, new string) int {
-	count := 0
-	oldAttr := []byte(fmt.Sprintf(`DataSourceName>%s</DataSourceName`, old))
-	newAttr := []byte(fmt.Sprintf(`DataSourceName>%s</DataSourceName`, new))
-	oldName := []byte(fmt.Sprintf(`<DataSource Name="%s">`, old))
-	newName := []byte(fmt.Sprintf(`<DataSource Name="%s">`, new))
-
-	newData, c1 := bytesReplaceAllCount(*data, oldAttr, newAttr)
-	*data = newData
-	count += c1
-	newData, c2 := bytesReplaceAllCount(*data, oldName, newName)
-	*data = newData
-	count += c2
-	return count
-}
-
-func addDataSource(data *[]byte, name, provider, connStr string) {
-	closeTag := []byte("</DataSources>")
-	idx := indexByte(*data, closeTag)
-	if idx == -1 {
-		return
+		xmlquery.RemoveFromTree(n)
+		fmt.Fprintf(&b, "Removed DataSource '%s'\n", name)
 	}
 
-	ds := fmt.Sprintf(`  <DataSource Name="%s">
-    <ConnectionProperties>
-      <DataProvider>%s</DataProvider>
-      <ConnectString>%s</ConnectString>
-    </ConnectionProperties>
-    <rd:SecurityType>None</rd:SecurityType>
-    <rd:DataSourceID>%s</rd:DataSourceID>
-  </DataSource>
-`, name, provider, connStr, generateGUID())
+	for _, r := range ops.Rename {
+		if n := d.findNamedElement("DataSource", r.Old); n != nil {
+			n.SetAttr("Name", r.New)
+			// Also update any <DataSourceName> references in DataSets.
+			for _, ref := range xmlquery.Find(d.root, "//DataSourceName") {
+				if strings.TrimSpace(ref.InnerText()) == r.Old {
+					setNodeText(ref, r.New)
+				}
+			}
+			fmt.Fprintf(&b, "Renamed DataSource '%s' -> '%s'\n", r.Old, r.New)
+		} else {
+			fmt.Fprintf(&b, "Renamed DataSource '%s' (not found)\n", r.Old)
+		}
+	}
 
-	insert := []byte(ds)
-	*data = append((*data)[:idx], append(insert, (*data)[idx:]...)...)
+	for _, u := range ops.SetConnectString {
+		n := d.findNamedElement("DataSource", u.Name)
+		if n == nil {
+			fmt.Fprintf(&b, "Set ConnectString for '%s' (datasource not found)\n", u.Name)
+			continue
+		}
+		if cp := child(n, "ConnectionProperties"); cp != nil {
+			if setSimpleChildText(cp, "ConnectString", u.ConnectString) {
+				fmt.Fprintf(&b, "Set ConnectString for DataSource '%s'\n", u.Name)
+			}
+		}
+	}
+
+	for _, a := range ops.Add {
+		if d.exists("DataSource", a.Name) {
+			fmt.Fprintf(&b, "Added DataSource '%s' (already exists, skipped)\n", a.Name)
+			continue
+		}
+		if err := d.addDataSource(a); err != nil {
+			fmt.Fprintf(&b, "Add DataSource '%s' failed: %v\n", a.Name, err)
+			continue
+		}
+		fmt.Fprintf(&b, "Added DataSource '%s'\n", a.Name)
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// addDataSource constructs a <DataSource> element and appends it to <DataSources>.
+func (d *Document) addDataSource(spec DataSourceAdd) error {
+	container := xmlquery.FindOne(d.root, "//DataSources")
+	if container == nil {
+		return fmt.Errorf("no <DataSources> element in document")
+	}
+	security := spec.SecurityType
+	if security == "" {
+		security = "None"
+	}
+
+	ds := createElement("DataSource", [2]string{"Name", spec.Name})
+	cp := createElement("ConnectionProperties")
+	xmlquery.AddChild(cp, elementWithText("DataProvider", spec.Provider))
+	xmlquery.AddChild(cp, elementWithText("ConnectString", spec.ConnectString))
+	xmlquery.AddChild(ds, cp)
+	xmlquery.AddChild(ds, elementWithText("rd:SecurityType", security))
+	xmlquery.AddChild(ds, elementWithText("rd:DataSourceID", newUUID()))
+
+	// Preserve a multi-line indented layout matching the file convention.
+	xmlquery.AddChild(container, newTextNode("\n    "))
+	xmlquery.AddChild(container, ds)
+	xmlquery.AddChild(container, newTextNode("\n  "))
+	return nil
+}
+
+// setSimpleChildText replaces the inner text of the first direct child element
+// named `tag` under parent. Returns false if not found.
+func setSimpleChildText(parent *xmlquery.Node, tag, value string) bool {
+	for c := parent.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == xmlquery.ElementNode && c.Data == tag {
+			setNodeText(c, value)
+			return true
+		}
+	}
+	return false
 }

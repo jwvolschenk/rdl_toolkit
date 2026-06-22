@@ -4,164 +4,259 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/antchfx/xmlquery"
 )
 
-// Validate performs structural validation on an RDL file.
-func Validate(path string) (string, error) {
-	doc, err := LoadRDL(path)
-	if err != nil {
-		return "", err
-	}
+// Severity is "error" or "warning". Errors mean SSRS will reject the file;
+// warnings mean the file will render but may be wrong.
+type Severity string
 
-	var issues []string
-	content := string(doc.Content)
+const (
+	SeverityError   Severity = "error"
+	SeverityWarning Severity = "warning"
+)
 
-	// Check cell/column count consistency in Tablix elements
-	tablixIssues := validateTablixStructure(doc.Content)
-	issues = append(issues, tablixIssues...)
-
-	// Check field-source consistency
-	fieldIssues := validateFieldSources(doc.Content)
-	issues = append(issues, fieldIssues...)
-
-	// Check row hierarchy
-	hierarchyIssues := validateRowHierarchy(doc.Content)
-	issues = append(issues, hierarchyIssues...)
-
-	// Check for basic XML well-formedness (simple check)
-	if !strings.Contains(content, "<Report") {
-		issues = append(issues, "Missing root <Report> element")
-	}
-
-	if len(issues) == 0 {
-		return fmt.Sprintf("Validation passed for %s (no issues found)", path), nil
-	}
-
-	summary := fmt.Sprintf("Validation found %d issue(s) in %s:\n", len(issues), path)
-	for _, issue := range issues {
-		summary += "  - " + issue + "\n"
-	}
-	return summary, nil
+// Issue is one validation finding.
+type Issue struct {
+	Severity Severity `json:"severity"`
+	XPath    string   `json:"xpath,omitempty"` // element location if known
+	Message  string   `json:"message"`
 }
 
-func validateTablixStructure(data []byte) []string {
-	var issues []string
+// ValidationReport aggregates findings for one file. Pass is true when no
+// error-severity issues were found (warnings don't fail the report).
+type ValidationReport struct {
+	File   string  `json:"file"`
+	Issues []Issue `json:"issues"`
+	Pass   bool    `json:"pass"`
+}
 
-	// Count TablixColumnHierarchy columns
-	colPattern := regexp.MustCompile(`<TablixColumnHierarchy>.*?</TablixColumnHierarchy>`)
-	bodyPattern := regexp.MustCompile(`<TablixBody>.*?</TablixBody>`)
-
-	colMatches := colPattern.FindAll(data, -1)
-	bodyMatches := bodyPattern.FindAll(data, -1)
-
-	if len(colMatches) != len(bodyMatches) {
-		issues = append(issues, fmt.Sprintf("TablixColumnHierarchy count (%d) != TablixBody count (%d)", len(colMatches), len(bodyMatches)))
+// Validate runs all checks on the file and returns a structured report.
+// Returns a non-nil error only for I/O or XML parser failures (file unreadable,
+// malformed XML). Structural and reference problems land in the report with
+// Pass=false; callers wanting a hard failure should check report.Pass.
+func Validate(path string) (*ValidationReport, error) {
+	doc, err := Load(path)
+	if err != nil {
+		return nil, err
 	}
+	r := doc.Validate()
+	r.File = path
+	return r, nil
+}
 
-	// For each TablixBody, check that all rows have the same number of cells
-	for i, body := range bodyMatches {
-		rows := findAllSimpleElements(body, "TablixRow")
-		if len(rows) == 0 {
-			issues = append(issues, fmt.Sprintf("TablixBody %d has no TablixRows", i))
+// Validate runs every check against the document and returns the report.
+func (d *Document) Validate() *ValidationReport {
+	r := &ValidationReport{Issues: []Issue{}}
+
+	d.checkTablixShape(r)
+	d.checkFieldReferences(r)
+	d.checkDatasetReferences(r)
+	d.checkDataSourceReferences(r)
+	d.checkParameterLayout(r)
+
+	r.Pass = true
+	for _, i := range r.Issues {
+		if i.Severity == SeverityError {
+			r.Pass = false
+			break
+		}
+	}
+	return r
+}
+
+// ── Checkers ───────────────────────────────────────────────────────────────
+
+// checkTablixShape verifies per-Tablix: column hierarchy member count equals
+// the body column count, and every row has the same effective cell width
+// (accounting for ColSpan).
+func (d *Document) checkTablixShape(r *ValidationReport) {
+	for _, t := range xmlquery.Find(d.root, "//Tablix") {
+		name := t.SelectAttr("Name")
+		xpath := fmt.Sprintf("//Tablix[@Name=%q]", name)
+
+		body := child(t, "TablixBody")
+		if body == nil {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError, XPath: xpath,
+				Message: "Tablix has no <TablixBody>",
+			})
 			continue
 		}
 
-		expectedCells := -1
-		for j, row := range rows {
-			cellCount := countSimpleElements(row, "TablixCell")
-			if expectedCells == -1 {
-				expectedCells = cellCount
-			} else if cellCount != expectedCells {
-				issues = append(issues, fmt.Sprintf("TablixBody %d, row %d: has %d cells, expected %d", i, j, cellCount, expectedCells))
+		cols := len(xmlquery.Find(body, "TablixColumns/TablixColumn"))
+		hierCols := len(xmlquery.Find(t, "TablixColumnHierarchy/TablixMembers/TablixMember"))
+		if cols == 0 {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError, XPath: xpath,
+				Message: "TablixBody has no TablixColumns",
+			})
+		} else if hierCols != cols {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError, XPath: xpath,
+				Message: fmt.Sprintf("TablixColumnHierarchy member count (%d) does not match TablixColumns count (%d)", hierCols, cols),
+			})
+		}
+
+		// Per-row effective width must equal column count.
+		rows := xmlquery.Find(body, "TablixRows/TablixRow")
+		expected := cols
+		for i, row := range rows {
+			cells := xmlquery.Find(row, "TablixCells/TablixCell")
+			effective := 0
+			for _, c := range cells {
+				effective += effectiveCellWidth(c)
+			}
+			if effective != expected {
+				r.Issues = append(r.Issues, Issue{
+					Severity: SeverityError,
+					XPath:    fmt.Sprintf("%s//TablixBody//TablixRow[%d]", xpath, i),
+					Message: fmt.Sprintf("row %d effective width %d does not match column count %d (check ColSpan values)",
+						i, effective, expected),
+				})
+			}
+		}
+
+		// Row hierarchy member count must equal body row count.
+		hierRows := len(xmlquery.Find(t, "TablixRowHierarchy/TablixMembers/TablixMember"))
+		if hierRows != len(rows) {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError, XPath: xpath,
+				Message: fmt.Sprintf("TablixRowHierarchy member count (%d) does not match TablixRows count (%d)", hierRows, len(rows)),
+			})
+		}
+	}
+}
+
+// effectiveCellWidth returns the column count consumed by a TablixCell.
+// Reads <ColSpan> if present; defaults to 1.
+func effectiveCellWidth(cell *xmlquery.Node) int {
+	if cs := child(cell, "CellContents"); cs != nil {
+		if col := child(cs, "ColSpan"); col != nil {
+			n := atoiSafe(strings.TrimSpace(col.InnerText()))
+			if n > 0 {
+				return n
+			}
+		}
+	}
+	return 1
+}
+
+// checkFieldReferences finds every Fields!X.Value reference and checks that X
+// is defined as a Field in some DataSet. Also checks that the Field's parent
+// dataset, if discoverable via Tablix binding, exists.
+func (d *Document) checkFieldReferences(r *ValidationReport) {
+	defined := map[string]bool{}
+	for _, fd := range xmlquery.Find(d.root, "//Field") {
+		if name := fd.SelectAttr("Name"); name != "" {
+			defined[name] = true
+		}
+	}
+	re := regexp.MustCompile(`Fields!([^.]+)\.Value`)
+	seen := map[string]bool{}
+	for _, v := range xmlquery.Find(d.root, "//Value") {
+		text := strings.TrimSpace(v.InnerText())
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			field := m[1]
+			if seen[field] {
+				continue
+			}
+			seen[field] = true
+			if !defined[field] {
+				r.Issues = append(r.Issues, Issue{
+					Severity: SeverityError,
+					Message:  fmt.Sprintf("Fields!%s.Value is referenced but not defined in any <Field>", field),
+				})
+			}
+		}
+	}
+}
+
+// checkDatasetReferences verifies that every <DataSetName> in a Tablix points
+// at an existing DataSet, and that every <DataSourceName> in a DataSet Query
+// points at an existing DataSource.
+func (d *Document) checkDatasetReferences(r *ValidationReport) {
+	dataSets := map[string]bool{}
+	for _, n := range xmlquery.Find(d.root, "//DataSet") {
+		if name := n.SelectAttr("Name"); name != "" {
+			dataSets[name] = true
+		}
+	}
+	dataSources := map[string]bool{}
+	for _, n := range xmlquery.Find(d.root, "//DataSource") {
+		if name := n.SelectAttr("Name"); name != "" {
+			dataSources[name] = true
+		}
+	}
+
+	for _, t := range xmlquery.Find(d.root, "//Tablix") {
+		if dn := child(t, "DataSetName"); dn != nil {
+			name := strings.TrimSpace(dn.InnerText())
+			if name != "" && !dataSets[name] {
+				r.Issues = append(r.Issues, Issue{
+					Severity: SeverityError,
+					XPath:    fmt.Sprintf("//Tablix[@Name=%q]/DataSetName", t.SelectAttr("Name")),
+					Message:  fmt.Sprintf("Tablix references DataSet %q which is not defined", name),
+				})
 			}
 		}
 	}
 
-	return issues
-}
-
-func validateFieldSources(data []byte) []string {
-	var issues []string
-
-	// Find all DataSet names
-	dsPattern := regexp.MustCompile(`<DataSet Name="([^"]+)"`)
-	dsMatches := dsPattern.FindAllSubmatch(data, -1)
-	dsNames := make(map[string]bool)
-	for _, m := range dsMatches {
-		dsNames[string(m[1])] = true
-	}
-
-	// Find all Field references (Fields!X.Value)
-	fieldRefPattern := regexp.MustCompile(`Fields!([^.]+)\.Value`)
-	fieldRefs := fieldRefPattern.FindAllSubmatch(data, -1)
-	refFields := make(map[string]bool)
-	for _, m := range fieldRefs {
-		refFields[string(m[1])] = true
-	}
-
-	// Find all defined fields
-	fieldDefPattern := regexp.MustCompile(`<Field Name="([^"]+)"`)
-	fieldDefs := fieldDefPattern.FindAllSubmatch(data, -1)
-	defFields := make(map[string]bool)
-	for _, m := range fieldDefs {
-		defFields[string(m[1])] = true
-	}
-
-	// Check that referenced fields are defined
-	for field := range refFields {
-		if !defFields[field] {
-			issues = append(issues, fmt.Sprintf("Field reference 'Fields!%s.Value' used but field not defined in any DataSet", field))
+	for _, ds := range xmlquery.Find(d.root, "//DataSet") {
+		dsName := ds.SelectAttr("Name")
+		if q := child(ds, "Query"); q != nil {
+			if dsn := child(q, "DataSourceName"); dsn != nil {
+				name := strings.TrimSpace(dsn.InnerText())
+				if name != "" && !dataSources[name] {
+					r.Issues = append(r.Issues, Issue{
+						Severity: SeverityError,
+						XPath:    fmt.Sprintf("//DataSet[@Name=%q]/Query/DataSourceName", dsName),
+						Message:  fmt.Sprintf("DataSet %q references DataSource %q which is not defined", dsName, name),
+					})
+				}
+			}
 		}
 	}
-
-	return issues
 }
 
-func validateRowHierarchy(data []byte) []string {
-	var issues []string
-
-	// Simple check: TablixRowHierarchy TablixMembers count should match TablixRows count
-	hierarchyPattern := regexp.MustCompile(`<TablixRowHierarchy>.*?</TablixRowHierarchy>`)
-	bodyPattern := regexp.MustCompile(`<TablixBody>.*?</TablixBody>`)
-
-	hierarchies := hierarchyPattern.FindAll(data, -1)
-	bodies := bodyPattern.FindAll(data, -1)
-
-	for i := 0; i < len(hierarchies) && i < len(bodies); i++ {
-		hierMembers := countSimpleElements(hierarchies[i], "TablixMember")
-		bodyRows := countSimpleElements(bodies[i], "TablixRow")
-
-		// The hierarchy has one extra member for the header
-		if hierMembers > 0 && bodyRows > 0 && hierMembers != bodyRows+1 && hierMembers != bodyRows {
-			issues = append(issues, fmt.Sprintf("TablixRowHierarchy %d: %d TablixMembers but %d TablixRows (expected members == rows or rows+1)", i, hierMembers, bodyRows))
+// checkDataSourceReferences is folded into checkDatasetReferences above.
+// Kept as a placeholder for future DataSource-only checks (duplicate names,
+// missing ConnectionProperties, etc.).
+func (d *Document) checkDataSourceReferences(r *ValidationReport) {
+	// Detect duplicate DataSource names.
+	seen := map[string]int{}
+	for _, n := range xmlquery.Find(d.root, "//DataSource") {
+		if name := n.SelectAttr("Name"); name != "" {
+			seen[name]++
 		}
 	}
-
-	return issues
-}
-
-func findAllSimpleElements(data []byte, tag string) [][]byte {
-	startTag := []byte("<" + tag)
-	endTag := []byte("</" + tag + ">")
-	var results [][]byte
-	idx := 0
-	for {
-		start := indexByte(data[idx:], startTag)
-		if start == -1 {
-			break
+	for name, count := range seen {
+		if count > 1 {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("DataSource %q defined %d times (must be unique)", name, count),
+			})
 		}
-		start += idx
-		end := indexByte(data[start:], endTag)
-		if end == -1 {
-			break
-		}
-		end += start + len(endTag)
-		results = append(results, data[start:end])
-		idx = end
 	}
-	return results
 }
 
-func countSimpleElements(data []byte, tag string) int {
-	return len(findAllSimpleElements(data, tag))
+// checkParameterLayout verifies every ParameterName in ReportParametersLayout
+// points at a defined ReportParameter.
+func (d *Document) checkParameterLayout(r *ValidationReport) {
+	defined := map[string]bool{}
+	for _, p := range xmlquery.Find(d.root, "//ReportParameter") {
+		if name := p.SelectAttr("Name"); name != "" {
+			defined[name] = true
+		}
+	}
+	for _, ref := range xmlquery.Find(d.root, "//CellDefinition/ParameterName") {
+		name := strings.TrimSpace(ref.InnerText())
+		if name != "" && !defined[name] {
+			r.Issues = append(r.Issues, Issue{
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("ReportParametersLayout references parameter %q which is not defined", name),
+			})
+		}
+	}
 }

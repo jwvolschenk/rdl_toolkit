@@ -2,78 +2,97 @@ package rdl
 
 import (
 	"fmt"
+	"strings"
+
+	"github.com/antchfx/xmlquery"
 )
 
-// ManageParameters adds or removes ReportParameters.
-func ManageParameters(path string, adds []ParamAddInfo, removes []string) (string, error) {
-	doc, err := LoadRDL(path)
+// ParameterOps bundles Parameter mutations for a single Manage call.
+type ParameterOps struct {
+	Remove []string       `json:"remove,omitempty"`
+	Add    []ParameterAdd `json:"add,omitempty"`
+}
+
+// ManageParameters applies the operations to the file.
+func ManageParameters(path string, ops ParameterOps, dryRun bool) (string, error) {
+	doc, err := Load(path)
 	if err != nil {
 		return "", err
 	}
-
-	summary := ""
-
-	// Process removes
-	for _, name := range removes {
-		count := removeParameter(&doc.Content, name)
-		summary += fmt.Sprintf("Removed parameter '%s' (%d occurrence(s))\n", name, count)
-	}
-
-	// Process adds
-	for _, add := range adds {
-		addParameter(&doc.Content, add)
-		summary += fmt.Sprintf("Added parameter '%s' (type=%s, hidden=%s)\n", add.Name, add.Type, add.Hidden)
-	}
-
-	if err := doc.Save(path); err != nil {
-		return "", fmt.Errorf("writing file: %w", err)
-	}
-	return summary, nil
+	summary := doc.ManageParameters(ops)
+	return maybeSave(doc, path, summary, dryRun)
 }
 
-func removeParameter(data *[]byte, name string) int {
-	count := 0
-	startTag := []byte(fmt.Sprintf(`<ReportParameter Name="%s">`, name))
-	endTag := []byte("</ReportParameter>")
+// ManageParameters applies ops to the document, returning a summary.
+// Removing a parameter also strips any ReportParametersLayout CellDefinition
+// that references it (orphaned layout references break SSRS rendering).
+func (d *Document) ManageParameters(ops ParameterOps) string {
+	var b strings.Builder
 
-	for {
-		start := indexByte(*data, startTag)
-		if start == -1 {
-			break
+	for _, name := range ops.Remove {
+		n := d.findNamedElement("ReportParameter", name)
+		if n == nil {
+			fmt.Fprintf(&b, "Removed parameter '%s' (not found)\n", name)
+			continue
 		}
-		end := indexByte((*data)[start:], endTag)
-		if end == -1 {
-			break
+		xmlquery.RemoveFromTree(n)
+		// Also remove layout cells referencing this parameter.
+		layoutCount := 0
+		for _, ref := range xmlquery.Find(d.root, "//CellDefinition") {
+			pn := child(ref, "ParameterName")
+			if pn != nil && strings.TrimSpace(pn.InnerText()) == name {
+				xmlquery.RemoveFromTree(ref)
+				layoutCount++
+			}
 		}
-		end += start + len(endTag)
-		if end < len(*data) && (*data)[end] == '\n' {
-			end++
+		extra := ""
+		if layoutCount > 0 {
+			extra = fmt.Sprintf(" (+ %d layout cell(s))", layoutCount)
 		}
-		*data = append((*data)[:start], (*data)[end:]...)
-		count++
+		fmt.Fprintf(&b, "Removed parameter '%s'%s\n", name, extra)
 	}
-	return count
+
+	for _, a := range ops.Add {
+		if d.exists("ReportParameter", a.Name) {
+			fmt.Fprintf(&b, "Added parameter '%s' (already exists, skipped)\n", a.Name)
+			continue
+		}
+		d.addParameter(a)
+		fmt.Fprintf(&b, "Added parameter '%s' (type=%s)\n", a.Name, a.Type)
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
-func addParameter(data *[]byte, info ParamAddInfo) {
-	closeTag := []byte("</ReportParameters>")
-	idx := indexByte(*data, closeTag)
-	if idx == -1 {
+// addParameter constructs a <ReportParameter> element and appends it to
+// <ReportParameters>.
+func (d *Document) addParameter(spec ParameterAdd) {
+	container := xmlquery.FindOne(d.root, "//ReportParameters")
+	if container == nil {
 		return
 	}
 
-	defaultVal := ""
-	if info.Default != "" {
-		defaultVal = fmt.Sprintf("    <DefaultValue><Values><Value>%s</Value></Values></DefaultValue>\n", info.Default)
+	prompt := spec.Prompt
+	if prompt == "" {
+		prompt = spec.Name
 	}
 
-	param := fmt.Sprintf(`  <ReportParameter Name="%s">
-    <DataType>%s</DataType>
-%s    <Hidden>%s</Hidden>
-    <Prompt>%s</Prompt>
-  </ReportParameter>
-`, info.Name, info.Type, defaultVal, info.Hidden, info.Name)
+	p := createElement("ReportParameter", [2]string{"Name", spec.Name})
+	xmlquery.AddChild(p, elementWithText("DataType", spec.Type))
 
-	insert := []byte(param)
-	*data = append((*data)[:idx], append(insert, (*data)[idx:]...)...)
+	if spec.Default != "" {
+		dv := createElement("DefaultValue")
+		vals := createElement("Values")
+		xmlquery.AddChild(vals, elementWithText("Value", spec.Default))
+		xmlquery.AddChild(dv, vals)
+		xmlquery.AddChild(p, dv)
+	}
+	if spec.Hidden {
+		xmlquery.AddChild(p, elementWithText("Hidden", "true"))
+	}
+	xmlquery.AddChild(p, elementWithText("Prompt", prompt))
+
+	xmlquery.AddChild(container, newTextNode("\n  "))
+	xmlquery.AddChild(container, p)
+	xmlquery.AddChild(container, newTextNode("\n  "))
 }

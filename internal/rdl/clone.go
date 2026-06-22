@@ -1,60 +1,70 @@
 package rdl
 
 import (
-	"bytes"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/antchfx/xmlquery"
 )
 
-// Clone copies a source RDL to a target with a new ReportID.
-func Clone(source, target string) (string, error) {
-	raw, hasBOM, err := ReadRDL(source)
+// Clone copies a source RDL to a target with a fresh ReportID.
+// When dryRun is true, the target is not written; the returned UUID is the
+// ID that would have been used.
+func Clone(source, target string, dryRun bool) (string, error) {
+	doc, err := Load(source)
 	if err != nil {
 		return "", fmt.Errorf("reading source: %w", err)
 	}
+	newID := newUUID()
+	doc.SetReportID(newID)
 
-	newID := generateGUID()
-
-	// Replace ReportID - it's in <rd:ReportID>guid</rd:ReportID>
-	reportIDTag := []byte("<rd:ReportID>")
-	reportIDEnd := []byte("</rd:ReportID>")
-	start := bytes.Index(raw, reportIDTag)
-	if start != -1 {
-		start += len(reportIDTag)
-		end := bytes.Index(raw[start:], reportIDEnd)
-		if end != -1 {
-			var buf []byte
-			buf = append(buf, raw[:start]...)
-			buf = append(buf, []byte(newID)...)
-			buf = append(buf, raw[start+end:]...)
-			raw = buf
-		}
+	if dryRun {
+		return newID, nil
 	}
 
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("creating target directory: %w", err)
 	}
-
-	if hasBOM {
-		raw = append(bomBytes, raw...)
-	}
-	raw = normalizeCRLF(raw)
-
-	if err := os.WriteFile(target, raw, 0644); err != nil {
+	if err := doc.Save(target); err != nil {
 		return "", fmt.Errorf("writing target: %w", err)
 	}
-
 	return newID, nil
 }
 
-func generateGUID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+// SetReportID sets the <rd:ReportID> value, creating the element if missing.
+func (d *Document) SetReportID(id string) {
+	if n := findByLocalName(d.root, "ReportID"); n != nil {
+		setNodeText(n, id)
+		return
+	}
+	if report := d.reportRoot(); report != nil {
+		appendIndented(report, elementWithText("rd:ReportID", id), depthOf(report))
+	}
+}
+
+// ReportID returns the current <rd:ReportID> value, or empty if missing.
+func (d *Document) ReportID() string {
+	return localNameText(d.root, "ReportID")
+}
+
+// reportRoot returns the root <Report> element, or nil if missing.
+func (d *Document) reportRoot() *xmlquery.Node {
+	for n := d.root.FirstChild; n != nil; n = n.NextSibling {
+		if n.Type == xmlquery.ElementNode && n.Data == "Report" {
+			return n
+		}
+	}
+	return nil
+}
+
+// depthOf returns the depth of n from the document root, with the document
+// root being depth -1 (so the root element is depth 0).
+func depthOf(n *xmlquery.Node) int {
+	d := -1
+	for p := n; p != nil; p = p.Parent {
+		d++
+	}
+	return d
 }

@@ -1,30 +1,21 @@
 package rdl
 
-import (
-	"fmt"
-)
+import "fmt"
 
-// FixEncoding ensures UTF-8 BOM and CRLF line endings.
+// FixEncoding ensures the file has UTF-8 BOM and CRLF line endings on next save.
+// CRLF is normalised in Document.Save automatically; this only forces BOM.
 func FixEncoding(path string) (string, error) {
-	raw, hasBOM, err := ReadRDL(path)
+	doc, err := Load(path)
 	if err != nil {
 		return "", err
 	}
-
-	// Normalize line endings to CRLF
-	raw = normalizeCRLF(raw)
-
-	// Ensure BOM
-	if !hasBOM {
-		raw = append(bomBytes, raw...)
-	}
-
-	if err := WriteRDL(path, raw); err != nil {
+	addedBOM := !doc.hasBOM
+	doc.hasBOM = true
+	if err := doc.Save(path); err != nil {
 		return "", fmt.Errorf("writing file: %w", err)
 	}
-
 	status := "already correct"
-	if !hasBOM {
+	if addedBOM {
 		status = "added BOM"
 	}
 	return fmt.Sprintf("Fixed encoding for %s (%s, CRLF ensured)", path, status), nil
