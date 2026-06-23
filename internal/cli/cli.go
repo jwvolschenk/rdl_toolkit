@@ -60,6 +60,55 @@ func Execute() error {
 	cloneCmd.MarkFlagRequired("target")
 	root.AddCommand(cloneCmd)
 
+	// create
+	var createTitle, createOrientation, createDescription, createAuthor, createFontFamily string
+	var createPageWidth, createPageHeight, createLeftMargin, createRightMargin, createTopMargin, createBottomMargin string
+	createCmd := &cobra.Command{
+		Use:   "create TARGET",
+		Short: "Create a new RDL file from scratch with minimal skeleton",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			spec := rdl.CreateSpec{
+				Target:      args[0],
+				Title:       createTitle,
+				Orientation: createOrientation,
+				Description: createDescription,
+				Author:      createAuthor,
+				FontFamily:  createFontFamily,
+				PageWidth:   createPageWidth,
+				PageHeight:  createPageHeight,
+				LeftMargin:  createLeftMargin,
+				RightMargin: createRightMargin,
+				TopMargin:   createTopMargin,
+				BottomMargin: createBottomMargin,
+			}
+			newID, err := rdl.Create(spec, dryRun)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return err
+			}
+			prefix := ""
+			if dryRun {
+				prefix = "[DRY RUN] "
+			}
+			fmt.Printf("%sCreated %s\nNew ReportID: %s\nTitle: %s\nOrientation: %s\n", prefix, args[0], newID, spec.Title, spec.Orientation)
+			return nil
+		},
+	}
+	createCmd.Flags().StringVar(&createTitle, "title", "", "Report title")
+	createCmd.Flags().StringVar(&createOrientation, "orientation", "Portrait", "Portrait or Landscape")
+	createCmd.Flags().StringVar(&createDescription, "description", "", "Pipe-delimited metadata")
+	createCmd.Flags().StringVar(&createAuthor, "author", "Credo", "Author name")
+	createCmd.Flags().StringVar(&createFontFamily, "font-family", "Segoe UI", "Default font family")
+	createCmd.Flags().StringVar(&createPageWidth, "page-width", "", "Page width (auto from orientation)")
+	createCmd.Flags().StringVar(&createPageHeight, "page-height", "", "Page height (auto from orientation)")
+	createCmd.Flags().StringVar(&createLeftMargin, "left-margin", "1cm", "Left margin")
+	createCmd.Flags().StringVar(&createRightMargin, "right-margin", "1cm", "Right margin")
+	createCmd.Flags().StringVar(&createTopMargin, "top-margin", "1cm", "Top margin")
+	createCmd.Flags().StringVar(&createBottomMargin, "bottom-margin", "1cm", "Bottom margin")
+	createCmd.MarkFlagRequired("title")
+	root.AddCommand(createCmd)
+
 	// update-metadata
 	var metaDesc, metaTitle, metaTitleTextbox, metaOrientation string
 	metaCmd := &cobra.Command{

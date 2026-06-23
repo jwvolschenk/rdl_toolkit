@@ -38,6 +38,7 @@ func NewServer() *server.MCPServer {
 			"Report metadata: description, language, author, page size, margins.",
 			func(doc *rdl.Document) any { return doc.GetMetadata() }),
 
+		createTool(),
 		cloneTool(),
 		updateMetadataTool(),
 		swapMacrosTool(),
@@ -79,6 +80,26 @@ func Serve() error {
 }
 
 // ── Tool definitions ────────────────────────────────────────────────────────
+
+func createTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_create",
+		gomcp.WithDescription("Create a new RDL file from scratch with minimal skeleton. No inherited baggage. Use rdl_add_datasource, rdl_add_dataset, rdl_rebuild_tablix to build up the report."),
+		gomcp.WithString("target", gomcp.Required(), gomcp.Description("Path to new RDL file")),
+		gomcp.WithString("title", gomcp.Required(), gomcp.Description("Report title")),
+		gomcp.WithString("orientation", gomcp.Description("Portrait (default) or Landscape"), gomcp.Enum("Portrait", "Landscape")),
+		gomcp.WithString("description", gomcp.Description("Pipe-delimited metadata (Section|Portfolio|Group|...)")),
+		gomcp.WithString("author", gomcp.Description("Author (default: Credo)")),
+		gomcp.WithString("fontFamily", gomcp.Description("Default font family (default: Segoe UI)")),
+		gomcp.WithString("pageWidth", gomcp.Description("Page width (default: auto from orientation)")),
+		gomcp.WithString("pageHeight", gomcp.Description("Page height (default: auto from orientation)")),
+		gomcp.WithString("leftMargin", gomcp.Description("Left margin (default: 1cm)")),
+		gomcp.WithString("rightMargin", gomcp.Description("Right margin (default: 1cm)")),
+		gomcp.WithString("topMargin", gomcp.Description("Top margin (default: 1cm)")),
+		gomcp.WithString("bottomMargin", gomcp.Description("Bottom margin (default: 1cm)")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleCreate}
+}
 
 func cloneTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_clone",
@@ -370,6 +391,39 @@ func validateTool() server.ServerTool {
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
+
+func handleCreate(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	target, res, _ := requireString(request, "target")
+	if res != nil {
+		return res, nil
+	}
+	title, res, _ := requireString(request, "title")
+	if res != nil {
+		return res, nil
+	}
+	spec := rdl.CreateSpec{
+		Target:      target,
+		Title:       title,
+		Orientation: request.GetString("orientation", ""),
+		Description: request.GetString("description", ""),
+		Author:      request.GetString("author", ""),
+		FontFamily:  request.GetString("fontFamily", ""),
+		PageWidth:   request.GetString("pageWidth", ""),
+		PageHeight:  request.GetString("pageHeight", ""),
+		LeftMargin:  request.GetString("leftMargin", ""),
+		RightMargin: request.GetString("rightMargin", ""),
+		TopMargin:   request.GetString("topMargin", ""),
+		BottomMargin: request.GetString("bottomMargin", ""),
+	}
+	dry := dryRunFromRequest(request)
+	newID, err := rdl.Create(spec, dry)
+	if err != nil {
+		return mapError(err)
+	}
+	data := map[string]any{"target": target, "reportId": newID, "title": title, "orientation": spec.Orientation}
+	summary := fmt.Sprintf("Created %s (ReportID: %s, %s)", target, newID, spec.Orientation)
+	return successResult("rdl_create", target, dry, data, summary)
+}
 
 func handleClone(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
 	source, res, _ := requireString(request, "source")
