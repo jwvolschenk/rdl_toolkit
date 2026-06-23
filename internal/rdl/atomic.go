@@ -347,6 +347,10 @@ func (d *Document) AddParameterOp(spec ParameterAdd) (MutationOutcome, error) {
 		return MutationOutcome{}, fmt.Errorf("no <ReportParameters> element in document")
 	}
 	d.addParameter(spec)
+	// Regenerate the parameter layout grid so the report opens in Visual Studio.
+	var log strings.Builder
+	d.sanitizeParameterGrid(&log)
+	d.ensureParameterLayout(&log)
 	return MutationOutcome{Action: "added", Name: spec.Name}, nil
 }
 
@@ -382,5 +386,6 @@ func (d *Document) RemoveParameterOp(name string) (MutationOutcome, error) {
 	d.compactParameterGrid()
 	var b strings.Builder
 	d.sanitizeParameterGrid(&b)
+	d.ensureParameterLayout(&b)
 	return MutationOutcome{Action: "removed", Name: name, Count: layoutCount}, nil
 }

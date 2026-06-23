@@ -499,6 +499,31 @@ func Execute() error {
 	valCmd.Flags().BoolVar(&validateJSON, "json", false, "Emit the report as JSON instead of text")
 	root.AddCommand(valCmd)
 
+	// apply-theme
+	var themeSource, themeTarget string
+	themeCmd := &cobra.Command{
+		Use:   "apply-theme",
+		Short: "Copy visual theming from a source report to a target (HeaderTheme, PageHeader, PageFooter, margins)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			summary, err := rdl.ApplyTheme(themeSource, themeTarget, dryRun)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return err
+			}
+			prefix := ""
+			if dryRun {
+				prefix = "[DRY RUN] "
+			}
+			fmt.Printf("%s%s\n", prefix, summary)
+			return nil
+		},
+	}
+	themeCmd.Flags().StringVar(&themeSource, "source", "", "Source RDL file (copy theme from)")
+	themeCmd.Flags().StringVar(&themeTarget, "target", "", "Target RDL file (apply theme to)")
+	themeCmd.MarkFlagRequired("source")
+	themeCmd.MarkFlagRequired("target")
+	root.AddCommand(themeCmd)
+
 	return root.Execute()
 }
 

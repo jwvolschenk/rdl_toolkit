@@ -66,6 +66,7 @@ func NewServer() *server.MCPServer {
 		tablixRemoveRowTool(),
 		tablixAddColumnTool(),
 		tablixRemoveColumnTool(),
+		applyThemeTool(),
 		fixEncodingTool(),
 		registerTool(),
 		validateTool(),
@@ -388,6 +389,16 @@ func validateTool() server.ServerTool {
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleValidate}
+}
+
+func applyThemeTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_apply_theme",
+		gomcp.WithDescription("Copy visual theming from a source report to a target. Copies HeaderTheme shared dataset, PageHeader, PageFooter, margins, and page dimensions. Adds pvc_Theme and vc_ReportPack parameters if missing. Does NOT touch data sources, datasets (except HeaderTheme), parameters (except theme params), or tablix."),
+		gomcp.WithString("source", gomcp.Required(), gomcp.Description("Path to source RDL file (the report to copy theme from)")),
+		gomcp.WithString("target", gomcp.Required(), gomcp.Description("Path to target RDL file (the report to apply theme to)")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleApplyTheme}
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
@@ -978,6 +989,23 @@ func handleValidate(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.
 		summary = fmt.Sprintf("validation failed with %d issue(s)", len(report.Issues))
 	}
 	return successResult("rdl_validate", file, false, report, summary)
+}
+
+func handleApplyTheme(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	source, res, _ := requireString(request, "source")
+	if res != nil {
+		return res, nil
+	}
+	target, res, _ := requireString(request, "target")
+	if res != nil {
+		return res, nil
+	}
+	summary, err := rdl.ApplyTheme(source, target, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	data := map[string]any{"source": source, "target": target}
+	return successResult("rdl_apply_theme", target, dryRunFromRequest(request), data, summary)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
