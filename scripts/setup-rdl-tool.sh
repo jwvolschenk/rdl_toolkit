@@ -37,9 +37,10 @@ detect_platform() {
         Linux)  os="linux" ;;
         MINGW*_NT*|MSYS_NT*|CYGWIN_NT*)
             echo ""
-            printf "  ${Y}Windows detected.${N} Download manually from:\n"
-            printf "    ${C}https://github.com/${FORK_REPO}/releases${N}\n\n"
-            printf "  ${D}Or use Git Bash / WSL to run this script.${N}\n\n"
+            printf "  ${Y}Windows detected.${N} Use the PowerShell installer instead:\n\n"
+            printf "    ${C}powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1${N}\n\n"
+            printf "  ${D}Or from a PowerShell terminal:${N}\n"
+            printf "    ${C}irm https://raw.githubusercontent.com/${FORK_REPO}/main/scripts/setup-rdl-tool.ps1 | iex${N}\n\n"
             exit 0
             ;;
         *) die "Unsupported OS: $os" ;;
@@ -114,13 +115,39 @@ download_binary() {
     ok "Installed to ${dest}"
 }
 
+# ── Agent prompt ─────────────────────────────────────────────────────────
+# Writes to >&2 so it works inside $() command substitution.
+prompt_agent() {
+    local agents=("Copilot" "Hermes" "Claude" "Codex" "Gemini" "Cursor" "OpenCode")
+
+    printf "\n" >&2
+    printf "  ${W}Which AI agent are you using?${N}\n" >&2
+    printf "\n" >&2
+    for i in "${!agents[@]}"; do
+        local marker=""
+        [ "$i" -eq 0 ] && marker=" ${D}(default)${N}"
+        printf "    ${C}%d)${N} %s%b\n" "$((i+1))" "${agents[$i]}" "$marker" >&2
+    done
+    printf "\n" >&2
+    printf "  Choice [1]: " >&2
+    read -r choice
+    choice="${choice:-1}"
+
+    local idx=$((choice - 1))
+    if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#agents[@]}" ]; then
+        echo "${agents[$idx]}"
+    else
+        echo "${agents[0]}"
+    fi
+}
+
 # ── Agent Instructions ───────────────────────────────────────────────────
 show_agent_instructions() {
     local agent_name="$1"
     local exe_path="$2"
 
     echo ""
-    printf "  ${W}Instructions for ${agent_name}${N}\n"
+    printf "  ${W}MCP Configuration for ${agent_name}${N}\n"
     echo ""
 
     case "$(echo "$agent_name" | tr '[:upper:]' '[:lower:]')" in
@@ -225,16 +252,10 @@ main() {
     esac
 
     # 6. Agent Instructions
-    if [ -n "$agent" ]; then
-        show_agent_instructions "$agent" "$dest"
-    else
-        echo ""
-        printf "  ${W}MCP Registration${N}\n"
-        printf "  ${D}To get instructions for an AI agent, run with --agent <Name>${N}\n"
-        printf "  ${D}Available agents: Hermes, Copilot, Claude, Codex, Gemini, Cursor, OpenCode${N}\n"
-        echo ""
-        printf "  ${D}Example: bash scripts/setup-rdl-tool.sh --agent Hermes${N}\n"
+    if [ -z "$agent" ]; then
+        agent="$(prompt_agent)"
     fi
+    show_agent_instructions "$agent" "$dest"
 
     # 7. Done
     echo ""

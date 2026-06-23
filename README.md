@@ -15,20 +15,34 @@ A Go CLI tool and MCP server for manipulating SSRS RDL (Report Definition Langua
 
 ## Installation
 
-**Quick install (from GitHub Releases):**
+### Linux / macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.sh | bash
 ```
 
-With agent registration instructions:
+The installer downloads the correct binary for your platform, verifies the checksum, and prompts you to select your AI agent for MCP configuration.
+
+To skip the prompt and specify an agent directly:
 
 ```bash
-bash scripts/setup-rdl-tool.sh --agent Hermes
-# Available agents: Hermes, Copilot, Claude, Codex, Gemini, Cursor, OpenCode
+bash scripts/setup-rdl-tool.sh --agent Copilot
 ```
 
-**Build from source:**
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.ps1 | iex
+```
+
+Or download and run manually:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1
+powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1 -Agent Copilot
+```
+
+### Build from source
 
 ```bash
 bash scripts/build-rdl-tool.sh
@@ -36,10 +50,112 @@ bash scripts/build-rdl-tool.sh
 go build -o bin/rdl-tool ./cmd/rdl-tool
 ```
 
-**Cross-platform build:**
+### Cross-platform build
 
 ```bash
 make build-all
+```
+
+Produces binaries for Linux (amd64 + arm64), Windows (amd64), and macOS (amd64 + arm64).
+
+## MCP Server Setup
+
+After installing, the setup script will prompt you to choose your AI agent and display the exact configuration to add. The instructions below are also available for reference.
+
+### Copilot (VS Code)
+
+Add to `~/.copilot/mcp-config.json` (user-wide) or `.vscode/mcp.json` (per-workspace):
+
+```json
+{
+  "mcpServers": {
+    "rdl-toolkit": {
+      "command": "rdl-tool",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Hermes
+
+Add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  rdl-toolkit:
+    command: rdl-tool
+    args:
+      --mcp
+    enabled: true
+```
+
+### Claude Desktop
+
+Add to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "rdl-toolkit": {
+      "command": "rdl-tool",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Codex
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.rdl-toolkit]
+command = "rdl-tool"
+args = ["--mcp"]
+startup_timeout_sec = 30
+```
+
+### Gemini
+
+Add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "rdl-toolkit": {
+      "command": "rdl-tool",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rdl-toolkit": {
+      "command": "rdl-tool",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### OpenCode
+
+Add to `~/.config/opencode/opencode.jsonc` (mcp section):
+
+```json
+"rdl-toolkit": {
+  "command": "rdl-tool",
+  "args": ["--mcp"],
+  "enabled": true
+}
 ```
 
 ## CLI Usage
@@ -87,53 +203,13 @@ rdl-tool validate report.rdl
 rdl-tool --dry-run manage-datasources report.rdl --add '{"name":"X","provider":"SQL","connectString":"..."}'
 ```
 
-## MCP Server Usage
-
-Start as an MCP server for AI agent integration (VS Code, Claude, Hermes, etc.):
-
-```bash
-rdl-tool --mcp
-```
-
-### Copilot CLI Configuration
-
-Add to `.github/mcp.json` in your project:
-
-```json
-{
-  "servers": {
-    "rdl-toolkit": {
-      "type": "stdio",
-      "command": "SSRS/tools/rdl-tool",
-      "args": ["--mcp"]
-    }
-  }
-}
-```
-
-### VS Code Configuration
-
-Add to `.vscode/mcp.json` in your project:
-
-```json
-{
-  "servers": {
-    "rdl-toolkit": {
-      "type": "stdio",
-      "command": "rdl-tool",
-      "args": ["--mcp"]
-    }
-  }
-}
-```
-
-### Available MCP Tools (v2.0.0)
+## Available MCP Tools (v2.0.0)
 
 All tools return **structured JSON** with `ok`, `tool`, `file`, and optional `data` / `summary`. Errors return JSON with `code`, `message`, `hint`, and `context`.
 
-**Recommended workflow:** `rdl_inspect` → `rdl_list_*` → mutate with `dryRun: true` → `rdl_validate` → mutate with `dryRun: false`.
+**Recommended workflow:** `rdl_inspect` -> `rdl_list_*` -> mutate with `dryRun: true` -> `rdl_validate` -> mutate with `dryRun: false`.
 
-**Inspection (read-only — call these first):**
+**Inspection (read-only -- call these first):**
 
 | Tool | Description |
 |------|-------------|
@@ -144,7 +220,7 @@ All tools return **structured JSON** with `ok`, `tool`, `file`, and optional `da
 | `rdl_list_tablixes` | Each tablix with name, dataset, columns, per-cell textbox + value |
 | `rdl_get_metadata` | Report metadata: description, language, author, page size, margins |
 
-**Mutations (atomic — one operation per call):**
+**Mutations (atomic -- one operation per call):**
 
 | Tool | Description |
 |------|-------------|
@@ -176,11 +252,3 @@ All tools return **structured JSON** with `ok`, `tool`, `file`, and optional `da
 | `rdl_validate` | Validate RDL structure; check `data.pass` |
 
 **Breaking change from v1.x:** `rdl_manage_datasources`, `rdl_manage_datasets`, and `rdl_manage_parameters` were removed. Use the atomic `rdl_add_*`, `rdl_remove_*`, `rdl_rename_*`, and `rdl_set_*` tools instead.
-
-## Cross-Platform Build
-
-```bash
-make build-all
-```
-
-Produces binaries for Linux, Windows, and macOS (amd64 + arm64).

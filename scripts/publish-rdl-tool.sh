@@ -79,12 +79,14 @@ bump_version() {
 }
 
 # ── Interactive version prompt ───────────────────────────────────────────
+# NOTE: prompts go to >&2 so that command substitution $() only captures
+# the final version string on stdout.
 prompt_version() {
     local latest_tag="$1"
 
     if [ -z "$latest_tag" ]; then
-        printf "  ${W}No existing tags found.${N}\n"
-        printf "  Enter version tag (e.g. ${C}v1.0.0${N}): "
+        printf "  ${W}No existing tags found.${N}\n" >&2
+        printf "  Enter version tag (e.g. ${C}v1.0.0${N}): " >&2
         read -r tag
         [ -n "$tag" ] || die "Version tag required"
         echo "$tag"
@@ -96,16 +98,16 @@ prompt_version() {
     minor="$(bump_version "$latest_tag" minor)"
     major="$(bump_version "$latest_tag" major)"
 
-    echo ""
-    printf "  ${W}Current version:${N} ${latest_tag}\n"
-    echo ""
-    printf "  ${W}Select next version:${N}\n"
-    printf "    ${C}1)${N} ${patch}  ${D}(patch)${N}\n"
-    printf "    ${C}2)${N} ${minor}  ${D}(minor)${N}\n"
-    printf "    ${C}3)${N} ${major}  ${D}(major)${N}\n"
-    printf "    ${C}4)${N} custom\n"
-    echo ""
-    printf "  Choice [1]: "
+    printf "\n" >&2
+    printf "  ${W}Current version:${N} ${latest_tag}\n" >&2
+    printf "\n" >&2
+    printf "  ${W}Select next version:${N}\n" >&2
+    printf "    ${C}1)${N} ${patch}  ${D}(patch)${N}\n" >&2
+    printf "    ${C}2)${N} ${minor}  ${D}(minor)${N}\n" >&2
+    printf "    ${C}3)${N} ${major}  ${D}(major)${N}\n" >&2
+    printf "    ${C}4)${N} custom\n" >&2
+    printf "\n" >&2
+    printf "  Choice [1]: " >&2
     read -r choice
     choice="${choice:-1}"
 
@@ -114,7 +116,7 @@ prompt_version() {
         2) echo "$minor" ;;
         3) echo "$major" ;;
         4)
-            printf "  Enter version tag (e.g. ${C}v2.0.0-rc1${N}): "
+            printf "  Enter version tag (e.g. ${C}v2.0.0-rc1${N}): " >&2
             read -r tag
             [ -n "$tag" ] || die "Version tag required"
             echo "$tag"
