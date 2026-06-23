@@ -52,6 +52,11 @@ func (d *Document) ManageParameters(ops ParameterOps) string {
 		fmt.Fprintf(&b, "Removed parameter '%s'%s\n", name, extra)
 	}
 
+	// Compact the parameter layout grid: reassign RowIndex values to be
+	// contiguous (no gaps) and update NumberOfRows. Visual Studio's SSRS
+	// designer throws "Index was out of range" on sparse grids.
+	d.compactParameterGrid()
+
 	for _, a := range ops.Add {
 		if d.exists("ReportParameter", a.Name) {
 			fmt.Fprintf(&b, "Added parameter '%s' (already exists, skipped)\n", a.Name)
@@ -95,4 +100,69 @@ func (d *Document) addParameter(spec ParameterAdd) {
 	childIndent := detectChildIndent(container)
 	containerIndent := detectContainerIndent(container)
 	appendIndentedWithSuffix(container, p, childIndent, containerIndent)
+}
+
+// compactParameterGrid reassigns RowIndex values in the parameter layout grid
+// to be contiguous (no gaps) and updates NumberOfRows. Visual Studio's SSRS
+// designer throws "Index was out of range" when the grid has sparse rows.
+func (d *Document) compactParameterGrid() {
+	grid := xmlquery.FindOne(d.root, "//GridLayoutDefinition")
+	if grid == nil {
+		return
+	}
+
+	// Collect all remaining CellDefinitions with their RowIndex.
+	cells := xmlquery.Find(grid, ".//CellDefinition")
+	if len(cells) == 0 {
+		return
+	}
+
+	// Build a sorted list of unique RowIndex values and create a mapping.
+	rowSet := make(map[int]bool)
+	for _, cell := range cells {
+		ri := child(cell, "RowIndex")
+		if ri == nil {
+			continue
+		}
+		var idx int
+		fmt.Sscanf(strings.TrimSpace(ri.InnerText()), "%d", &idx)
+		rowSet[idx] = true
+	}
+
+	// Create old→new row index mapping (contiguous).
+	oldRows := make([]int, 0, len(rowSet))
+	for r := range rowSet {
+		oldRows = append(oldRows, r)
+	}
+	// Sort ascending.
+	for i := range oldRows {
+		for j := i + 1; j < len(oldRows); j++ {
+			if oldRows[i] > oldRows[j] {
+				oldRows[i], oldRows[j] = oldRows[j], oldRows[i]
+			}
+		}
+	}
+	rowMap := make(map[int]int)
+	for newIdx, oldIdx := range oldRows {
+		rowMap[oldIdx] = newIdx
+	}
+
+	// Update each CellDefinition's RowIndex.
+	for _, cell := range cells {
+		ri := child(cell, "RowIndex")
+		if ri == nil {
+			continue
+		}
+		var oldIdx int
+		fmt.Sscanf(strings.TrimSpace(ri.InnerText()), "%d", &oldIdx)
+		if newIdx, ok := rowMap[oldIdx]; ok && newIdx != oldIdx {
+			setNodeText(ri, fmt.Sprintf("%d", newIdx))
+		}
+	}
+
+	// Update NumberOfRows.
+	nr := xmlquery.FindOne(grid, ".//NumberOfRows")
+	if nr != nil {
+		setNodeText(nr, fmt.Sprintf("%d", len(oldRows)))
+	}
 }
