@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	gomcp "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -15,39 +14,51 @@ import (
 func NewServer() *server.MCPServer {
 	s := server.NewMCPServer(
 		"rdl-toolkit",
-		"1.0.0",
+		"2.0.0",
 		server.WithToolCapabilities(false),
 	)
 
 	s.AddTools(
-		// Read-only inspection (Phase 1)
 		inspectTool("rdl_inspect",
-			"Get a top-level summary of an RDL report: ReportID, language, page size/orientation, and counts of data sources, data sets, parameters, and tablixes. Use this first to orient yourself before any mutation. Always safe to call.",
+			serverInstructions+" Top-level summary: ReportID, language, page size/orientation, counts. Call first.",
 			func(doc *rdl.Document) any { return doc.Overview() }),
 		inspectTool("rdl_list_datasources",
-			"List every <DataSource> in the report with its provider, connect string, security type, and datasource ID. Use before adding or renaming datasources to see what already exists.",
+			"List every DataSource with provider, connect string, security type, and ID.",
 			func(doc *rdl.Document) any { return doc.ListDataSources() }),
 		inspectTool("rdl_list_datasets",
-			"List every <DataSet> with its bound datasource, command text, fields (name + data field), and filter count. Use before adding/removing fields or updating command text.",
+			"List every DataSet with bound datasource, command text, fields, and filter count.",
 			func(doc *rdl.Document) any { return doc.ListDataSets() }),
 		inspectTool("rdl_list_parameters",
-			"List every <ReportParameter> with its data type, nullable/allowblank/multivalue/hidden flags, prompt, and default value. Use before adding or removing parameters.",
+			"List every ReportParameter with type, flags, prompt, and default value.",
 			func(doc *rdl.Document) any { return doc.ListParameters() }),
 		inspectTool("rdl_list_tablixes",
-			"List every <Tablix> with its name, bound dataset, column widths, and per-row cell contents (textbox name + value/expression). Use to understand table structure before rebuilding or editing.",
+			"List every Tablix with name, dataset, columns, and per-cell textbox + value. Call before tablix edits.",
 			func(doc *rdl.Document) any { return doc.ListTablixes() }),
 		inspectTool("rdl_get_metadata",
-			"Get report-level metadata: ReportID, description, language, author, page width/height/orientation, and the four margins. These are the fields that rdl_update_metadata can change.",
+			"Report metadata: description, language, author, page size, margins.",
 			func(doc *rdl.Document) any { return doc.GetMetadata() }),
 
-		// Mutations (existing)
 		cloneTool(),
 		updateMetadataTool(),
 		swapMacrosTool(),
 		swapFieldsTool(),
-		manageDatasourcesTool(),
-		manageDatasetsTool(),
-		manageParametersTool(),
+
+		addDataSourceTool(),
+		removeDataSourceTool(),
+		renameDataSourceTool(),
+		setDataSourceConnectStringTool(),
+
+		addDataSetTool(),
+		removeDataSetTool(),
+		renameDataSetTool(),
+		addDataSetFieldTool(),
+		clearDataSetFieldsTool(),
+		clearDataSetFiltersTool(),
+		setDataSetCommandTextTool(),
+
+		addParameterTool(),
+		removeParameterTool(),
+
 		rebuildTablixTool(),
 		tablixSetCellTool(),
 		tablixAddRowTool(),
@@ -71,15 +82,9 @@ func Serve() error {
 
 func cloneTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_clone",
-		gomcp.WithDescription("Copy an RDL file with a new ReportID. The target file gets a fresh GUID."),
-		gomcp.WithString("source",
-			gomcp.Required(),
-			gomcp.Description("Path to source RDL file"),
-		),
-		gomcp.WithString("target",
-			gomcp.Required(),
-			gomcp.Description("Path to target RDL file"),
-		),
+		gomcp.WithDescription("Copy an RDL file with a new ReportID. Target gets a fresh GUID."),
+		gomcp.WithString("source", gomcp.Required(), gomcp.Description("Path to source RDL file")),
+		gomcp.WithString("target", gomcp.Required(), gomcp.Description("Path to target RDL file")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleClone}
@@ -87,24 +92,12 @@ func cloneTool() server.ServerTool {
 
 func updateMetadataTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_update_metadata",
-		gomcp.WithDescription("Update report metadata: description, title, and/or page orientation. Title requires titleTextbox to be set — use rdl_list_tablixes or rdl_get_metadata to find the textbox name. Orientation swaps A4 page dimensions only."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithString("description",
-			gomcp.Description("New description text (pipe-delimited conventions preserved)"),
-		),
-		gomcp.WithString("title",
-			gomcp.Description("New title text. Requires titleTextbox to identify which Textbox to update."),
-		),
-		gomcp.WithString("titleTextbox",
-			gomcp.Description("Name attribute of the Textbox to update with the new title. Required when 'title' is set."),
-		),
-		gomcp.WithString("orientation",
-			gomcp.Description("Portrait or Landscape (swaps A4 page width/height)"),
-			gomcp.Enum("Portrait", "Landscape"),
-		),
+		gomcp.WithDescription("Update report metadata: description, title, and/or page orientation. Title requires titleTextbox."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("description", gomcp.Description("New description text")),
+		gomcp.WithString("title", gomcp.Description("New title text (requires titleTextbox)")),
+		gomcp.WithString("titleTextbox", gomcp.Description("Textbox Name to update when setting title")),
+		gomcp.WithString("orientation", gomcp.Description("Portrait or Landscape"), gomcp.Enum("Portrait", "Landscape")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleUpdateMetadata}
@@ -112,16 +105,10 @@ func updateMetadataTool() server.ServerTool {
 
 func swapMacrosTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_swap_macros",
-		gomcp.WithDescription("Replace strings in ConnectString elements. Use OLD:NEW format for each pair."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithArray("pairs",
-			gomcp.Required(),
-			gomcp.Description("Replacement pairs in OLD:NEW format (e.g. ['old_macro:new_macro'])"),
-			gomcp.WithStringItems(),
-		),
+		gomcp.WithDescription("Replace one string in all ConnectString elements. One replacement per call."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("old", gomcp.Required(), gomcp.Description("String to find")),
+		gomcp.WithString("new", gomcp.Required(), gomcp.Description("Replacement string")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleSwapMacros}
@@ -129,112 +116,167 @@ func swapMacrosTool() server.ServerTool {
 
 func swapFieldsTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_swap_fields",
-		gomcp.WithDescription("Replace Fields!X.Value references in Value elements. Use OLD:NEW format for each pair."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithArray("pairs",
-			gomcp.Required(),
-			gomcp.Description("Replacement pairs in OLD:NEW format (e.g. ['OldField:NewField'])"),
-			gomcp.WithStringItems(),
-		),
+		gomcp.WithDescription("Replace one Fields!X.Value reference in Value elements. One field rename per call."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("old", gomcp.Required(), gomcp.Description("Old field name (without Fields! prefix)")),
+		gomcp.WithString("new", gomcp.Required(), gomcp.Description("New field name")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleSwapFields}
 }
 
-func manageDatasourcesTool() server.ServerTool {
-	tool := gomcp.NewTool("rdl_manage_datasources",
-		gomcp.WithDescription("Add, remove, rename DataSources, or replace their ConnectStrings. All operations are idempotent: adding an existing name is a no-op; removing/renaming a missing name reports 'not found' in the summary."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithArray("add",
-			gomcp.Description("DataSources to add. Each item: {name, provider, connectString, securityType?}. securityType defaults to 'None'."),
-		),
-		gomcp.WithArray("remove",
-			gomcp.Description("DataSource names to remove"),
-			gomcp.WithStringItems(),
-		),
-		gomcp.WithArray("rename",
-			gomcp.Description("Renames; each item: {old, new}"),
-		),
-		gomcp.WithArray("setConnectString",
-			gomcp.Description("Replace ConnectString of a named DataSource. Each item: {name, connectString}"),
-		),
+func addDataSourceTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_add_datasource",
+		gomcp.WithDescription("Add one DataSource. Idempotent: returns skipped if name already exists."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSource name")),
+		gomcp.WithString("provider", gomcp.Required(), gomcp.Description("Data provider (e.g. SQL)")),
+		gomcp.WithString("connectString", gomcp.Required(), gomcp.Description("Connection string")),
+		gomcp.WithString("securityType", gomcp.Description("Security type; defaults to None")),
 		withDryRunParam(),
 	)
-	return server.ServerTool{Tool: tool, Handler: handleManageDatasources}
+	return server.ServerTool{Tool: tool, Handler: handleAddDataSource}
 }
 
-func manageDatasetsTool() server.ServerTool {
-	tool := gomcp.NewTool("rdl_manage_datasets",
-		gomcp.WithDescription("Add, remove, rename DataSets, edit their fields, clear fields/filters, or update CommandText. Idempotent: adding an existing DataSet name is a no-op. Renaming a DataSet also updates DataSetName references in Tablixes."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithArray("add",
-			gomcp.Description("DataSets to add. Each item: {name, datasource, cmdText, fields:[...]}. cmdText may contain colons."),
-		),
-		gomcp.WithArray("remove",
-			gomcp.Description("DataSet names to remove"),
-			gomcp.WithStringItems(),
-		),
-		gomcp.WithArray("rename",
-			gomcp.Description("Renames; each item: {old, new}"),
-		),
-		gomcp.WithArray("addField",
-			gomcp.Description("Fields to add. Each item: {dataset, field}"),
-		),
-		gomcp.WithArray("clearFields",
-			gomcp.Description("DataSet names whose <Fields> section should be emptied (tags preserved)"),
-			gomcp.WithStringItems(),
-		),
-		gomcp.WithArray("clearFilters",
-			gomcp.Description("DataSet names whose <Filters> section should be removed entirely"),
-			gomcp.WithStringItems(),
-		),
-		gomcp.WithArray("setCommandText",
-			gomcp.Description("Replace CommandText. Each item: {dataset, cmdText}"),
-		),
+func removeDataSourceTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_remove_datasource",
+		gomcp.WithDescription("Remove one DataSource by name."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSource name to remove")),
 		withDryRunParam(),
 	)
-	return server.ServerTool{Tool: tool, Handler: handleManageDatasets}
+	return server.ServerTool{Tool: tool, Handler: handleRemoveDataSource}
 }
 
-func manageParametersTool() server.ServerTool {
-	tool := gomcp.NewTool("rdl_manage_parameters",
-		gomcp.WithDescription("Add or remove ReportParameters. Removing a parameter also strips any ReportParametersLayout CellDefinition referencing it (prevents orphaned-layout SSRS errors). Idempotent: adding an existing parameter is a no-op."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithArray("add",
-			gomcp.Description("Parameters to add. Each item: {name, type, default?, prompt?, hidden?}. prompt defaults to name."),
-		),
-		gomcp.WithArray("remove",
-			gomcp.Description("Parameter names to remove"),
-			gomcp.WithStringItems(),
-		),
+func renameDataSourceTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_rename_datasource",
+		gomcp.WithDescription("Rename one DataSource and update DataSourceName references in DataSets."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("old", gomcp.Required(), gomcp.Description("Current name")),
+		gomcp.WithString("new", gomcp.Required(), gomcp.Description("New name")),
 		withDryRunParam(),
 	)
-	return server.ServerTool{Tool: tool, Handler: handleManageParameters}
+	return server.ServerTool{Tool: tool, Handler: handleRenameDataSource}
+}
+
+func setDataSourceConnectStringTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_set_datasource_connect_string",
+		gomcp.WithDescription("Replace ConnectString of one named DataSource."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSource name")),
+		gomcp.WithString("connectString", gomcp.Required(), gomcp.Description("New connection string")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleSetDataSourceConnectString}
+}
+
+func addDataSetTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_add_dataset",
+		gomcp.WithDescription("Add one DataSet. Idempotent: returns skipped if name already exists."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSet name")),
+		gomcp.WithString("datasource", gomcp.Required(), gomcp.Description("Bound DataSource name")),
+		gomcp.WithString("cmdText", gomcp.Required(), gomcp.Description("SQL command text")),
+		gomcp.WithArray("fields", gomcp.Description("Field names to add"), gomcp.WithStringItems()),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleAddDataSet}
+}
+
+func removeDataSetTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_remove_dataset",
+		gomcp.WithDescription("Remove one DataSet by name."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSet name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleRemoveDataSet}
+}
+
+func renameDataSetTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_rename_dataset",
+		gomcp.WithDescription("Rename one DataSet and update DataSetName references in Tablixes."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("old", gomcp.Required(), gomcp.Description("Current name")),
+		gomcp.WithString("new", gomcp.Required(), gomcp.Description("New name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleRenameDataSet}
+}
+
+func addDataSetFieldTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_add_dataset_field",
+		gomcp.WithDescription("Add one Field to a DataSet."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("dataset", gomcp.Required(), gomcp.Description("DataSet name")),
+		gomcp.WithString("field", gomcp.Required(), gomcp.Description("Field name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleAddDataSetField}
+}
+
+func clearDataSetFieldsTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_clear_dataset_fields",
+		gomcp.WithDescription("Remove all Field elements from a DataSet (container preserved)."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSet name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleClearDataSetFields}
+}
+
+func clearDataSetFiltersTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_clear_dataset_filters",
+		gomcp.WithDescription("Remove Filters section from a DataSet."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("DataSet name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleClearDataSetFilters}
+}
+
+func setDataSetCommandTextTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_set_dataset_command_text",
+		gomcp.WithDescription("Replace CommandText of one DataSet."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("dataset", gomcp.Required(), gomcp.Description("DataSet name")),
+		gomcp.WithString("cmdText", gomcp.Required(), gomcp.Description("New SQL command text")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleSetDataSetCommandText}
+}
+
+func addParameterTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_add_parameter",
+		gomcp.WithDescription("Add one ReportParameter. Idempotent: returns skipped if name already exists."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("Parameter name")),
+		gomcp.WithString("type", gomcp.Required(), gomcp.Description("Data type"),
+			gomcp.Enum("String", "Integer", "Float", "Boolean", "DateTime")),
+		gomcp.WithString("default", gomcp.Description("Default value")),
+		gomcp.WithString("prompt", gomcp.Description("Prompt text; defaults to name")),
+		gomcp.WithBoolean("hidden", gomcp.Description("Hide parameter in UI")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleAddParameter}
+}
+
+func removeParameterTool() server.ServerTool {
+	tool := gomcp.NewTool("rdl_remove_parameter",
+		gomcp.WithDescription("Remove one ReportParameter and clean orphaned layout cells."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("name", gomcp.Required(), gomcp.Description("Parameter name")),
+		withDryRunParam(),
+	)
+	return server.ServerTool{Tool: tool, Handler: handleRemoveParameter}
 }
 
 func rebuildTablixTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_rebuild_tablix",
-		gomcp.WithDescription("Rebuild a Tablix in an RDL file from a JSON spec. Spec name targets a specific tablix; if empty, the first tablix is rebuilt and keeps its existing name. Colspan is honoured without placeholder cells (correct SSRS semantics)."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithObject("spec",
-			gomcp.Required(),
-			gomcp.Description(`Tablix spec: {"name":"X","columns":[3.0,5.0],"dataset":"DS","rows":[{"height":"0.5cm","cells":[{"textbox":"T","value":"v","colspan":2,"format":"N2"}]}]}`),
-		),
+		gomcp.WithDescription("Rebuild a Tablix from a JSON spec. Colspan without placeholder cells."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithObject("spec", gomcp.Required(),
+			gomcp.Description(`{"name":"X","columns":[3.0,5.0],"dataset":"DS","rows":[{"height":"0.5cm","cells":[{"textbox":"T","value":"v","colspan":2}]}]}`)),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleRebuildTablix}
@@ -242,14 +284,14 @@ func rebuildTablixTool() server.ServerTool {
 
 func tablixSetCellTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_tablix_set_cell",
-		gomcp.WithDescription("Set the value of a single cell at (row, col) in a named Tablix. Both indexes are 0-based and address the cell position within the row (colspans are not expanded)."),
+		gomcp.WithDescription("Set one cell value at (row, col). Indexes are 0-based cell positions (colspan not expanded)."),
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
-		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name attribute")),
-		gomcp.WithInteger("row", gomcp.Required(), gomcp.Description("Row index, 0-based")),
-		gomcp.WithInteger("col", gomcp.Required(), gomcp.Description("Column (cell) index within the row, 0-based")),
-		gomcp.WithString("value", gomcp.Required(), gomcp.Description("New cell value. Use Expression=true for VB expressions like =Fields!X.Value")),
-		gomcp.WithString("format", gomcp.Description("Optional format string (e.g. 'N2', 'yyyy-MM-dd')")),
-		gomcp.WithBoolean("expression", gomcp.Description("Set true to mark value as a VB expression")),
+		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name")),
+		gomcp.WithInteger("row", gomcp.Required(), gomcp.Description("Row index")),
+		gomcp.WithInteger("col", gomcp.Required(), gomcp.Description("Cell index in row")),
+		gomcp.WithString("value", gomcp.Required(), gomcp.Description("Cell value; use expression:true for VB expressions")),
+		gomcp.WithString("format", gomcp.Description("Format string (e.g. N2)")),
+		gomcp.WithBoolean("expression", gomcp.Description("Prepend '=' if missing")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleTablixSetCell}
@@ -257,12 +299,12 @@ func tablixSetCellTool() server.ServerTool {
 
 func tablixAddRowTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_tablix_add_row",
-		gomcp.WithDescription("Append (or insert) a row into a named Tablix. Adds a matching TablixMember to the row hierarchy. Cells may be empty for a row of empty textboxes."),
+		gomcp.WithDescription("Append or insert one row into a Tablix."),
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name")),
-		gomcp.WithString("height", gomcp.Description("Row height (e.g. '0.5cm'); defaults to 0.5cm")),
-		gomcp.WithArray("cells", gomcp.Description(`Row cells: [{"textbox":"X","value":"Y","colspan":1,"format":"N2"}]`)),
-		gomcp.WithInteger("index", gomcp.Description("Insert position; -1 or omit to append")),
+		gomcp.WithString("height", gomcp.Description("Row height (default 0.5cm)")),
+		gomcp.WithArray("cells", gomcp.Description(`[{"textbox":"X","value":"Y","colspan":1}]`)),
+		gomcp.WithInteger("index", gomcp.Description("Insert position; -1 to append")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleTablixAddRow}
@@ -270,10 +312,10 @@ func tablixAddRowTool() server.ServerTool {
 
 func tablixRemoveRowTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_tablix_remove_row",
-		gomcp.WithDescription("Remove a row from a named Tablix by index. Also removes the corresponding TablixMember from the row hierarchy."),
+		gomcp.WithDescription("Remove one row from a Tablix by index."),
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name")),
-		gomcp.WithInteger("index", gomcp.Required(), gomcp.Description("Row index, 0-based")),
+		gomcp.WithInteger("index", gomcp.Required(), gomcp.Description("Row index")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleTablixRemoveRow}
@@ -281,11 +323,11 @@ func tablixRemoveRowTool() server.ServerTool {
 
 func tablixAddColumnTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_tablix_add_column",
-		gomcp.WithDescription("Append (or insert) a column to a named Tablix. Adds an empty cell to every row and a TablixMember to the column hierarchy. NB: rows with existing ColSpan cells are NOT adjusted — fix up ColSpan values manually if needed."),
+		gomcp.WithDescription("Append or insert one column. ColSpan values are NOT adjusted on existing rows."),
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name")),
-		gomcp.WithString("width", gomcp.Description("Column width (e.g. '2.5cm'); defaults to 2.5cm")),
-		gomcp.WithInteger("index", gomcp.Description("Insert position; -1 or omit to append")),
+		gomcp.WithString("width", gomcp.Description("Column width (default 2.5cm)")),
+		gomcp.WithInteger("index", gomcp.Description("Insert position; -1 to append")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleTablixAddColumn}
@@ -293,10 +335,10 @@ func tablixAddColumnTool() server.ServerTool {
 
 func tablixRemoveColumnTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_tablix_remove_column",
-		gomcp.WithDescription("Remove a column from a named Tablix by index. Removes the cell at that index from every row. NB: ColSpan values are not adjusted — fix manually if needed."),
+		gomcp.WithDescription("Remove one column by index. ColSpan values are NOT adjusted."),
 		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 		gomcp.WithString("tablix", gomcp.Required(), gomcp.Description("Tablix Name")),
-		gomcp.WithInteger("index", gomcp.Required(), gomcp.Description("Column index, 0-based")),
+		gomcp.WithInteger("index", gomcp.Required(), gomcp.Description("Column index")),
 		withDryRunParam(),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleTablixRemoveColumn}
@@ -304,85 +346,54 @@ func tablixRemoveColumnTool() server.ServerTool {
 
 func fixEncodingTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_fix_encoding",
-		gomcp.WithDescription("Ensure an RDL file has UTF-8 BOM and CRLF line endings."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
+		gomcp.WithDescription("Ensure UTF-8 BOM and CRLF line endings."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleFixEncoding}
 }
 
 func registerTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_register",
-		gomcp.WithDescription("Register an RDL file in a .rptproj project file. Adds the report entry and sorts alphabetically."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
-		gomcp.WithString("project",
-			gomcp.Required(),
-			gomcp.Description("Path to .rptproj file"),
-		),
+		gomcp.WithDescription("Register an RDL file in a .rptproj project file."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
+		gomcp.WithString("project", gomcp.Required(), gomcp.Description("Path to .rptproj file")),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleRegister}
 }
 
 func validateTool() server.ServerTool {
 	tool := gomcp.NewTool("rdl_validate",
-		gomcp.WithDescription("Validate an RDL file: XML well-formedness (via load), reference integrity (Fields!X.Value → defined Field, Tablix.DataSetName → DataSet, DataSet.DataSourceName → DataSource), and structural checks (Tablix column/cell/hierarchy counts match). Returns a structured report with severity (error/warning), xpath, and message per issue. The Pass flag is false if any errors exist. Heuristics like 'Language looks like a name' or 'ConnectString has raw &' are intentionally NOT included — call this for real defects, not vibes."),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
+		gomcp.WithDescription("Validate RDL structure and references. Check data.pass in the result."),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 	)
 	return server.ServerTool{Tool: tool, Handler: handleValidate}
-}
-
-// ── Argument structs for BindArguments ──────────────────────────────────────
-
-// Each Ops-aware handler binds to a thin wrapper carrying the file path plus
-// the rdl Ops struct. Field tags mirror rdl's struct tags exactly so the
-// agent's JSON keys map straight through.
-
-type datasourceCall struct {
-	File string `json:"file"`
-	rdl.DataSourceOps
-}
-
-type datasetCall struct {
-	File string `json:"file"`
-	rdl.DataSetOps
-}
-
-type parameterCall struct {
-	File string `json:"file"`
-	rdl.ParameterOps
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 func handleClone(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	source, err := request.RequireString("source")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	source, res, _ := requireString(request, "source")
+	if res != nil {
+		return res, nil
 	}
-	target, err := request.RequireString("target")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	target, res, _ := requireString(request, "target")
+	if res != nil {
+		return res, nil
 	}
-
-	newID, err := rdl.Clone(source, target, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	newID, err := rdl.Clone(source, target, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(fmt.Sprintf("Cloned %s -> %s\nNew ReportID: %s", source, target, newID)), nil
+	data := map[string]any{"source": source, "target": target, "reportId": newID}
+	summary := fmt.Sprintf("Cloned %s -> %s (ReportID: %s)", source, target, newID)
+	return successResult("rdl_clone", target, dry, data, summary)
 }
 
 func handleUpdateMetadata(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
 	spec := rdl.MetadataUpdate{
 		Description:  request.GetString("description", ""),
@@ -391,307 +402,556 @@ func handleUpdateMetadata(ctx context.Context, request gomcp.CallToolRequest) (*
 		Orientation:  request.GetString("orientation", ""),
 	}
 	if spec.Description == "" && spec.Title == "" && spec.Orientation == "" {
-		return gomcp.NewToolResultError("at least one of description, title, or orientation must be provided"), nil
+		res, _ := errorResult("PRECONDITION", "at least one of description, title, or orientation must be provided", "", nil)
+		return res, nil
 	}
 	if spec.Title != "" && spec.TitleTextbox == "" {
-		return gomcp.NewToolResultError("title requires titleTextbox — call rdl_list_tablixes or rdl_get_metadata to find the textbox name"), nil
+		res, _ := errorResult("PRECONDITION", "title requires titleTextbox",
+			"call rdl_list_tablixes to find the textbox name", nil)
+		return res, nil
 	}
-
-	count, err := rdl.UpdateMetadata(file, spec, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	count, err := rdl.UpdateMetadata(file, spec, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(fmt.Sprintf("Updated %d metadata field(s) in %s", count, file)), nil
+	data := map[string]any{"fieldsUpdated": count}
+	return successResult("rdl_update_metadata", file, dry, data,
+		fmt.Sprintf("Updated %d metadata field(s)", count))
 }
 
 func handleSwapMacros(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	rawPairs, err := request.RequireStringSlice("pairs")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	old, res, _ := requireString(request, "old")
+	if res != nil {
+		return res, nil
 	}
-	pairs, err := parsePairs(rawPairs)
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	newVal, res, _ := requireString(request, "new")
+	if res != nil {
+		return res, nil
 	}
-	count, err := rdl.SwapMacros(file, pairs, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	count, err := rdl.SwapMacro(file, old, newVal, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(fmt.Sprintf("Replaced %d occurrence(s) in ConnectString elements of %s", count, file)), nil
+	data := map[string]any{"replacements": count, "old": old, "new": newVal}
+	return successResult("rdl_swap_macros", file, dry, data,
+		fmt.Sprintf("Replaced %d occurrence(s) in ConnectString elements", count))
 }
 
 func handleSwapFields(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	rawPairs, err := request.RequireStringSlice("pairs")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	old, res, _ := requireString(request, "old")
+	if res != nil {
+		return res, nil
 	}
-	pairs, err := parsePairs(rawPairs)
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	newVal, res, _ := requireString(request, "new")
+	if res != nil {
+		return res, nil
 	}
-	count, err := rdl.SwapFields(file, pairs, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	count, err := rdl.SwapField(file, old, newVal, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(fmt.Sprintf("Replaced %d occurrence(s) in Value elements of %s", count, file)), nil
+	data := map[string]any{"replacements": count, "old": old, "new": newVal}
+	return successResult("rdl_swap_fields", file, dry, data,
+		fmt.Sprintf("Replaced %d occurrence(s) in Value elements", count))
 }
 
-func handleManageDatasources(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	var call datasourceCall
-	if err := request.BindArguments(&call); err != nil {
-		return gomcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+func handleAddDataSource(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	if call.File == "" {
-		return gomcp.NewToolResultError("file is required"), nil
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
 	}
-	summary, err := rdl.ManageDataSources(call.File, call.DataSourceOps, dryRunFromRequest(request))
+	provider, res, _ := requireString(request, "provider")
+	if res != nil {
+		return res, nil
+	}
+	connectString, res, _ := requireString(request, "connectString")
+	if res != nil {
+		return res, nil
+	}
+	spec := rdl.DataSourceAdd{
+		Name:          name,
+		Provider:      provider,
+		ConnectString: connectString,
+		SecurityType:  request.GetString("securityType", ""),
+	}
+	out, err := rdl.AddDataSource(file, spec, dryRunFromRequest(request))
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successFromOutcome("rdl_add_datasource", file, dryRunFromRequest(request), out)
 }
 
-func handleManageDatasets(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	var call datasetCall
-	if err := request.BindArguments(&call); err != nil {
-		return gomcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+func handleRemoveDataSource(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	if call.File == "" {
-		return gomcp.NewToolResultError("file is required"), nil
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
 	}
-	summary, err := rdl.ManageDataSets(call.File, call.DataSetOps, dryRunFromRequest(request))
+	out, err := rdl.RemoveDataSource(file, name, dryRunFromRequest(request))
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successFromOutcome("rdl_remove_datasource", file, dryRunFromRequest(request), out)
 }
 
-func handleManageParameters(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	var call parameterCall
-	if err := request.BindArguments(&call); err != nil {
-		return gomcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+func handleRenameDataSource(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	if call.File == "" {
-		return gomcp.NewToolResultError("file is required"), nil
+	old, res, _ := requireString(request, "old")
+	if res != nil {
+		return res, nil
 	}
-	summary, err := rdl.ManageParameters(call.File, call.ParameterOps, dryRunFromRequest(request))
+	newName, res, _ := requireString(request, "new")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.RenameDataSource(file, old, newName, dryRunFromRequest(request))
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successFromOutcome("rdl_rename_datasource", file, dryRunFromRequest(request), out)
+}
+
+func handleSetDataSourceConnectString(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	connectString, res, _ := requireString(request, "connectString")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.SetDataSourceConnectString(file, name, connectString, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_set_datasource_connect_string", file, dryRunFromRequest(request), out)
+}
+
+func handleAddDataSet(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	datasource, res, _ := requireString(request, "datasource")
+	if res != nil {
+		return res, nil
+	}
+	cmdText, res, _ := requireString(request, "cmdText")
+	if res != nil {
+		return res, nil
+	}
+	fields, _ := request.RequireStringSlice("fields")
+	spec := rdl.DataSetAdd{Name: name, DataSource: datasource, CmdText: cmdText, Fields: fields}
+	out, err := rdl.AddDataSet(file, spec, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_add_dataset", file, dryRunFromRequest(request), out)
+}
+
+func handleRemoveDataSet(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.RemoveDataSet(file, name, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_remove_dataset", file, dryRunFromRequest(request), out)
+}
+
+func handleRenameDataSet(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	old, res, _ := requireString(request, "old")
+	if res != nil {
+		return res, nil
+	}
+	newName, res, _ := requireString(request, "new")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.RenameDataSet(file, old, newName, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_rename_dataset", file, dryRunFromRequest(request), out)
+}
+
+func handleAddDataSetField(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	dataset, res, _ := requireString(request, "dataset")
+	if res != nil {
+		return res, nil
+	}
+	field, res, _ := requireString(request, "field")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.AddDataSetField(file, dataset, field, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_add_dataset_field", file, dryRunFromRequest(request), out)
+}
+
+func handleClearDataSetFields(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.ClearDataSetFields(file, name, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_clear_dataset_fields", file, dryRunFromRequest(request), out)
+}
+
+func handleClearDataSetFilters(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.ClearDataSetFilters(file, name, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_clear_dataset_filters", file, dryRunFromRequest(request), out)
+}
+
+func handleSetDataSetCommandText(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	dataset, res, _ := requireString(request, "dataset")
+	if res != nil {
+		return res, nil
+	}
+	cmdText, res, _ := requireString(request, "cmdText")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.SetDataSetCommandText(file, dataset, cmdText, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_set_dataset_command_text", file, dryRunFromRequest(request), out)
+}
+
+func handleAddParameter(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	typ, res, _ := requireString(request, "type")
+	if res != nil {
+		return res, nil
+	}
+	spec := rdl.ParameterAdd{
+		Name:    name,
+		Type:    typ,
+		Default: request.GetString("default", ""),
+		Prompt:  request.GetString("prompt", ""),
+		Hidden:  request.GetBool("hidden", false),
+	}
+	out, err := rdl.AddParameter(file, spec, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_add_parameter", file, dryRunFromRequest(request), out)
+}
+
+func handleRemoveParameter(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	name, res, _ := requireString(request, "name")
+	if res != nil {
+		return res, nil
+	}
+	out, err := rdl.RemoveParameter(file, name, dryRunFromRequest(request))
+	if err != nil {
+		return mapError(err)
+	}
+	return successFromOutcome("rdl_remove_parameter", file, dryRunFromRequest(request), out)
 }
 
 func handleRebuildTablix(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
 	specObj := request.GetArguments()["spec"]
 	if specObj == nil {
-		return gomcp.NewToolResultError("required argument 'spec' not found"), nil
+		res, _ := errorResult("ARG_MISSING", "spec is required", "", map[string]any{"param": "spec"})
+		return res, nil
 	}
-	// Marshal the inbound spec back to bytes, then unmarshal into the typed struct.
 	specBytes, err := json.Marshal(specObj)
 	if err != nil {
-		return gomcp.NewToolResultError(fmt.Sprintf("failed to marshal spec: %v", err)), nil
+		res, _ := errorResult("ARG_INVALID", fmt.Sprintf("failed to marshal spec: %v", err), "", map[string]any{"param": "spec"})
+		return res, nil
 	}
 	var spec rdl.TablixSpec
 	if err := json.Unmarshal(specBytes, &spec); err != nil {
-		return gomcp.NewToolResultError(fmt.Sprintf("invalid spec: %v", err)), nil
+		res, _ := errorResult("ARG_INVALID", fmt.Sprintf("invalid spec: %v", err), "", map[string]any{"param": "spec"})
+		return res, nil
 	}
-
-	doc, err := rdl.Load(file)
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.RebuildTablixFile(file, spec, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(rdl.MapLoadError(err, file))
 	}
-	summary, err := doc.RebuildTablix(spec)
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
-	}
-	if dryRunFromRequest(request) {
-		return gomcp.NewToolResultText("[DRY RUN] " + summary), nil
-	}
-	if err := doc.Save(file); err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
-	}
-	return gomcp.NewToolResultText(summary), nil
+	data := map[string]any{"tablix": spec.Name, "summary": summary}
+	return successResult("rdl_rebuild_tablix", file, dry, data, summary)
 }
 
 func handleTablixSetCell(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, _ := request.RequireString("file")
-	tablix, _ := request.RequireString("tablix")
-	row, _ := request.RequireInt("row")
-	col, _ := request.RequireInt("col")
-	value, _ := request.RequireString("value")
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	tablix, res, _ := requireString(request, "tablix")
+	if res != nil {
+		return res, nil
+	}
+	row, res, _ := requireInt(request, "row")
+	if res != nil {
+		return res, nil
+	}
+	col, res, _ := requireInt(request, "col")
+	if res != nil {
+		return res, nil
+	}
+	value, res, _ := requireString(request, "value")
+	if res != nil {
+		return res, nil
+	}
 	cv := rdl.CellValue{
 		Value:      value,
 		Format:     request.GetString("format", ""),
 		Expression: request.GetBool("expression", false),
 	}
-	summary, err := rdl.TablixSetCell(file, tablix, row, col, cv, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.TablixSetCell(file, tablix, row, col, cv, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	data := map[string]any{"tablix": tablix, "row": row, "col": col, "value": value}
+	return successResult("rdl_tablix_set_cell", file, dry, data, summary)
 }
 
 func handleTablixAddRow(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, _ := request.RequireString("file")
-	tablix, _ := request.RequireString("tablix")
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	tablix, res, _ := requireString(request, "tablix")
+	if res != nil {
+		return res, nil
+	}
 	height := request.GetString("height", "")
 	index := int(request.GetInt("index", -1))
-
 	row := rdl.RowSpec{Height: height}
 	if raw, ok := request.GetArguments()["cells"]; ok && raw != nil {
 		b, _ := json.Marshal(raw)
 		if err := json.Unmarshal(b, &row.Cells); err != nil {
-			return gomcp.NewToolResultError(fmt.Sprintf("invalid cells: %v", err)), nil
+			res, _ := errorResult("ARG_INVALID", fmt.Sprintf("invalid cells: %v", err), "", map[string]any{"param": "cells"})
+			return res, nil
 		}
 	}
-	summary, err := rdl.TablixAddRow(file, tablix, row, index, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.TablixAddRow(file, tablix, row, index, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successResult("rdl_tablix_add_row", file, dry, map[string]any{"tablix": tablix, "index": index}, summary)
 }
 
 func handleTablixRemoveRow(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, _ := request.RequireString("file")
-	tablix, _ := request.RequireString("tablix")
-	index, _ := request.RequireInt("index")
-	summary, err := rdl.TablixRemoveRow(file, tablix, index, dryRunFromRequest(request))
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	return gomcp.NewToolResultText(summary), nil
+	tablix, res, _ := requireString(request, "tablix")
+	if res != nil {
+		return res, nil
+	}
+	index, res, _ := requireInt(request, "index")
+	if res != nil {
+		return res, nil
+	}
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.TablixRemoveRow(file, tablix, index, dry)
+	if err != nil {
+		return mapError(err)
+	}
+	return successResult("rdl_tablix_remove_row", file, dry, map[string]any{"tablix": tablix, "index": index}, summary)
 }
 
 func handleTablixAddColumn(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, _ := request.RequireString("file")
-	tablix, _ := request.RequireString("tablix")
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
+	}
+	tablix, res, _ := requireString(request, "tablix")
+	if res != nil {
+		return res, nil
+	}
 	width := request.GetString("width", "")
 	index := int(request.GetInt("index", -1))
-	summary, err := rdl.TablixAddColumn(file, tablix, width, index, dryRunFromRequest(request))
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.TablixAddColumn(file, tablix, width, index, dry)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successResult("rdl_tablix_add_column", file, dry, map[string]any{"tablix": tablix, "index": index}, summary)
 }
 
 func handleTablixRemoveColumn(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, _ := request.RequireString("file")
-	tablix, _ := request.RequireString("tablix")
-	index, _ := request.RequireInt("index")
-	summary, err := rdl.TablixRemoveColumn(file, tablix, index, dryRunFromRequest(request))
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	return gomcp.NewToolResultText(summary), nil
+	tablix, res, _ := requireString(request, "tablix")
+	if res != nil {
+		return res, nil
+	}
+	index, res, _ := requireInt(request, "index")
+	if res != nil {
+		return res, nil
+	}
+	dry := dryRunFromRequest(request)
+	summary, err := rdl.TablixRemoveColumn(file, tablix, index, dry)
+	if err != nil {
+		return mapError(err)
+	}
+	return successResult("rdl_tablix_remove_column", file, dry, map[string]any{"tablix": tablix, "index": index}, summary)
 }
 
 func handleFixEncoding(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-
 	summary, err := rdl.FixEncoding(file)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	return successResult("rdl_fix_encoding", file, false, nil, summary)
 }
 
 func handleRegister(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
-	project, err := request.RequireString("project")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	project, res, _ := requireString(request, "project")
+	if res != nil {
+		return res, nil
 	}
-
 	summary, err := rdl.Register(file, project)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(err)
 	}
-	return gomcp.NewToolResultText(summary), nil
+	data := map[string]any{"file": file, "project": project}
+	return successResult("rdl_register", file, false, data, summary)
 }
 
 func handleValidate(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+	file, res, _ := requireString(request, "file")
+	if res != nil {
+		return res, nil
 	}
 	report, err := rdl.Validate(file)
 	if err != nil {
-		return gomcp.NewToolResultError(err.Error()), nil
+		return mapError(rdl.MapLoadError(err, file))
 	}
-	b, _ := json.MarshalIndent(report, "", "  ")
-	return gomcp.NewToolResultText(string(b)), nil
+	summary := "validation passed"
+	if !report.Pass {
+		summary = fmt.Sprintf("validation failed with %d issue(s)", len(report.Issues))
+	}
+	return successResult("rdl_validate", file, false, report, summary)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-// dryRunFromRequest returns true when the caller wants to preview the mutation
-// without writing. Every mutation handler routes through this.
 func dryRunFromRequest(request gomcp.CallToolRequest) bool {
 	return request.GetBool("dryRun", false)
 }
 
-// withDryRunParam is a small wrapper to add the same boolean parameter to
-// every mutation tool definition. Saves repeating the description.
 func withDryRunParam() gomcp.ToolOption {
 	return gomcp.WithBoolean("dryRun",
-		gomcp.Description("If true, compute the mutation in memory and return the summary but do NOT write the file. Summary is prefixed with '[DRY RUN] '."))
+		gomcp.Description("If true, preview the mutation without writing. Result JSON includes dryRun:true."))
 }
 
-// inspectTool builds a read-only MCP tool that loads an RDL file and returns
-// the result of fn as indented JSON. Reduces 6 identical boilerplate blocks
-// to one helper call.
 func inspectTool(name, description string, fn func(*rdl.Document) any) server.ServerTool {
 	tool := gomcp.NewTool(name,
 		gomcp.WithDescription(description),
-		gomcp.WithString("file",
-			gomcp.Required(),
-			gomcp.Description("Path to RDL file"),
-		),
+		gomcp.WithString("file", gomcp.Required(), gomcp.Description("Path to RDL file")),
 	)
 	handler := func(ctx context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-		file, err := request.RequireString("file")
-		if err != nil {
-			return gomcp.NewToolResultError(err.Error()), nil
+		file, res, _ := requireString(request, "file")
+		if res != nil {
+			return res, nil
 		}
 		doc, err := rdl.Load(file)
 		if err != nil {
-			return gomcp.NewToolResultError(err.Error()), nil
+			return mapError(rdl.MapLoadError(err, file))
 		}
-		b, err := json.MarshalIndent(fn(doc), "", "  ")
-		if err != nil {
-			return gomcp.NewToolResultError(fmt.Sprintf("marshalling result: %v", err)), nil
-		}
-		return gomcp.NewToolResultText(string(b)), nil
+		return successResult(name, file, false, fn(doc), "ok")
 	}
 	return server.ServerTool{Tool: tool, Handler: handler}
-}
-
-func parsePairs(items []string) ([]rdl.RenamePair, error) {
-	pairs := make([]rdl.RenamePair, 0, len(items))
-	for _, item := range items {
-		parts := strings.SplitN(item, ":", 2)
-		if len(parts) != 2 || parts[0] == "" {
-			return nil, fmt.Errorf("invalid pair format %q, expected OLD:NEW", item)
-		}
-		pairs = append(pairs, rdl.RenamePair{Old: parts[0], New: parts[1]})
-	}
-	return pairs, nil
 }

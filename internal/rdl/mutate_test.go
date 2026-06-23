@@ -71,7 +71,10 @@ func TestClone(t *testing.T) {
 
 func TestUpdateMetadata_Description(t *testing.T) {
 	doc := mustLoad(t)
-	n := doc.UpdateMetadata(MetadataUpdate{Description: "New|Description"})
+	n, err := doc.UpdateMetadata(MetadataUpdate{Description: "New|Description"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 1 {
 		t.Errorf("changed count = %d, want 1", n)
 	}
@@ -83,7 +86,10 @@ func TestUpdateMetadata_Description(t *testing.T) {
 
 func TestUpdateMetadata_TitleByTextbox(t *testing.T) {
 	doc := mustLoad(t)
-	n := doc.UpdateMetadata(MetadataUpdate{Title: "New Sales Report", TitleTextbox: "ReportTitle"})
+	n, err := doc.UpdateMetadata(MetadataUpdate{Title: "New Sales Report", TitleTextbox: "ReportTitle"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 1 {
 		t.Errorf("changed count = %d, want 1", n)
 	}
@@ -92,7 +98,11 @@ func TestUpdateMetadata_TitleByTextbox(t *testing.T) {
 	if tb == nil {
 		t.Fatalf("ReportTitle textbox missing after save")
 	}
-	v := strings.TrimSpace(xmlquery.FindOne(tb, "Value").InnerText())
+	val := xmlquery.FindOne(tb, ".//Value")
+	if val == nil {
+		t.Fatal("ReportTitle Value element missing")
+	}
+	v := strings.TrimSpace(val.InnerText())
 	if v != "New Sales Report" {
 		t.Errorf("ReportTitle value = %q, want 'New Sales Report'", v)
 	}
@@ -103,7 +113,9 @@ func TestUpdateMetadata_OrientationSwap(t *testing.T) {
 	if doc.GetMetadata().Orientation != "Portrait" {
 		t.Fatalf("fixture should start Portrait; got %q", doc.GetMetadata().Orientation)
 	}
-	doc.UpdateMetadata(MetadataUpdate{Orientation: "Landscape"})
+	if _, err := doc.UpdateMetadata(MetadataUpdate{Orientation: "Landscape"}); err != nil {
+		t.Fatal(err)
+	}
 	re := reloadSaved(t, doc)
 	if re.GetMetadata().PageWidth != "29.7cm" || re.GetMetadata().PageHeight != "21cm" {
 		t.Errorf("Landscape dimensions wrong: w=%q h=%q",

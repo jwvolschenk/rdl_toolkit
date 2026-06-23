@@ -132,6 +132,11 @@ func TestRebuildTablix_ColspanNoPlaceholders(t *testing.T) {
 	if tab.Rows[0].Cells[0].Colspan != 2 {
 		t.Errorf("cell 0 colspan = %d, want 2", tab.Rows[0].Cells[0].Colspan)
 	}
+
+	r := re.Validate()
+	if !r.Pass {
+		t.Errorf("validation failed after colspan rebuild: %+v", r.Issues)
+	}
 }
 
 func TestRebuildTablix_CellCountMismatch(t *testing.T) {

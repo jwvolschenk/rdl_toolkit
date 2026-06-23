@@ -19,9 +19,12 @@ import (
 func UpdateMetadata(path string, spec MetadataUpdate, dryRun bool) (int, error) {
 	doc, err := Load(path)
 	if err != nil {
+		return 0, MapLoadError(err, path)
+	}
+	count, err := doc.UpdateMetadata(spec)
+	if err != nil {
 		return 0, err
 	}
-	count := doc.UpdateMetadata(spec)
 	if _, err := maybeSave(doc, path, "", dryRun); err != nil {
 		return 0, err
 	}
@@ -29,8 +32,8 @@ func UpdateMetadata(path string, spec MetadataUpdate, dryRun bool) (int, error) 
 }
 
 // UpdateMetadata applies the spec to the document in place. Returns the count
-// of fields actually changed.
-func (d *Document) UpdateMetadata(spec MetadataUpdate) int {
+// of fields actually changed, or an error when a requested change could not apply.
+func (d *Document) UpdateMetadata(spec MetadataUpdate) (int, error) {
 	count := 0
 	if spec.Description != "" {
 		if setSimpleElementText(d.root, "Description", spec.Description) {
@@ -38,15 +41,16 @@ func (d *Document) UpdateMetadata(spec MetadataUpdate) int {
 		}
 	}
 	if spec.Title != "" && spec.TitleTextbox != "" {
-		if d.setPageHeaderTextboxValue(spec.TitleTextbox, spec.Title) {
-			count++
+		if !d.setPageHeaderTextboxValue(spec.TitleTextbox, spec.Title) {
+			return count, NewNotFoundError("Textbox", spec.TitleTextbox, nil)
 		}
+		count++
 	}
 	if spec.Orientation == "Portrait" || spec.Orientation == "Landscape" {
 		applyOrientation(d.root, spec.Orientation)
 		count++
 	}
-	return count
+	return count, nil
 }
 
 // setSimpleElementText finds the first direct-child <tag> under <Report> and

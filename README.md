@@ -106,39 +106,55 @@ Add to `.vscode/mcp.json` in your project:
 }
 ```
 
-### Available MCP Tools
+### Available MCP Tools (v2.0.0)
 
-**Inspection (read-only — call these first to understand a report):**
+All tools return **structured JSON** with `ok`, `tool`, `file`, and optional `data` / `summary`. Errors return JSON with `code`, `message`, `hint`, and `context`.
+
+**Recommended workflow:** `rdl_inspect` → `rdl_list_*` → mutate with `dryRun: true` → `rdl_validate` → mutate with `dryRun: false`.
+
+**Inspection (read-only — call these first):**
 
 | Tool | Description |
 |------|-------------|
-| `rdl_inspect` | Top-level summary: ReportID, language, page size/orientation, counts of datasources/datasets/parameters/tablixes |
+| `rdl_inspect` | Top-level summary: ReportID, language, page size/orientation, counts |
 | `rdl_list_datasources` | Each datasource with provider, connect string, security type, ID |
 | `rdl_list_datasets` | Each dataset with bound datasource, command text, fields, filter count |
-| `rdl_list_parameters` | Each parameter with type, flags (nullable/hidden/multivalue), prompt, default |
-| `rdl_list_tablixes` | Each tablix with name, bound dataset, columns, and per-cell textbox + value |
+| `rdl_list_parameters` | Each parameter with type, flags, prompt, default |
+| `rdl_list_tablixes` | Each tablix with name, dataset, columns, per-cell textbox + value |
 | `rdl_get_metadata` | Report metadata: description, language, author, page size, margins |
 
-**Mutations:**
+**Mutations (atomic — one operation per call):**
 
 | Tool | Description |
 |------|-------------|
 | `rdl_clone` | Copy an RDL file with a new ReportID |
-| `rdl_update_metadata` | Update report metadata (description, title by textbox, orientation) |
-| `rdl_swap_macros` | Replace strings in ConnectString elements |
-| `rdl_swap_fields` | Replace Fields!X.Value references in Value elements |
-| `rdl_manage_datasources` | Add, remove, rename DataSources, or set their ConnectStrings (idempotent) |
-| `rdl_manage_datasets` | Add, remove, rename DataSets, edit fields, update CommandText (idempotent) |
-| `rdl_manage_parameters` | Add or remove ReportParameters (auto-cleans orphaned layout cells) |
-| `rdl_rebuild_tablix` | Rebuild a Tablix from a JSON spec (targeted by name; correct colspan semantics) |
-| `rdl_tablix_set_cell` | Set the value of a single cell at (row, col) |
-| `rdl_tablix_add_row` | Append or insert a row |
-| `rdl_tablix_remove_row` | Remove a row by index |
-| `rdl_tablix_add_column` | Append or insert a column |
-| `rdl_tablix_remove_column` | Remove a column by index |
+| `rdl_update_metadata` | Update description, title (by textbox), or orientation |
+| `rdl_swap_macros` | Replace one string in ConnectString elements (`old`, `new`) |
+| `rdl_swap_fields` | Replace one Fields!X.Value reference (`old`, `new` field names) |
+| `rdl_add_datasource` | Add one DataSource |
+| `rdl_remove_datasource` | Remove one DataSource |
+| `rdl_rename_datasource` | Rename one DataSource |
+| `rdl_set_datasource_connect_string` | Set ConnectString on one DataSource |
+| `rdl_add_dataset` | Add one DataSet |
+| `rdl_remove_dataset` | Remove one DataSet |
+| `rdl_rename_dataset` | Rename one DataSet |
+| `rdl_add_dataset_field` | Add one field to a DataSet |
+| `rdl_clear_dataset_fields` | Clear all fields from a DataSet |
+| `rdl_clear_dataset_filters` | Remove Filters from a DataSet |
+| `rdl_set_dataset_command_text` | Update CommandText on one DataSet |
+| `rdl_add_parameter` | Add one ReportParameter |
+| `rdl_remove_parameter` | Remove one ReportParameter |
+| `rdl_rebuild_tablix` | Rebuild a Tablix from a JSON spec |
+| `rdl_tablix_set_cell` | Set one cell value at (row, col) |
+| `rdl_tablix_add_row` | Append or insert one row |
+| `rdl_tablix_remove_row` | Remove one row by index |
+| `rdl_tablix_add_column` | Append or insert one column |
+| `rdl_tablix_remove_column` | Remove one column by index |
 | `rdl_fix_encoding` | Fix UTF-8 BOM and CRLF line endings |
 | `rdl_register` | Register an RDL in a .rptproj file |
-| `rdl_validate` | Validate RDL structure |
+| `rdl_validate` | Validate RDL structure; check `data.pass` |
+
+**Breaking change from v1.x:** `rdl_manage_datasources`, `rdl_manage_datasets`, and `rdl_manage_parameters` were removed. Use the atomic `rdl_add_*`, `rdl_remove_*`, `rdl_rename_*`, and `rdl_set_*` tools instead.
 
 ## Cross-Platform Build
 

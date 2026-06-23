@@ -34,7 +34,7 @@ type CellValue struct {
 func TablixSetCell(path, tablixName string, row, col int, value CellValue, dryRun bool) (string, error) {
 	doc, err := Load(path)
 	if err != nil {
-		return "", err
+		return "", MapLoadError(err, path)
 	}
 	summary, err := doc.SetTablixCell(tablixName, row, col, value)
 	if err != nil {
@@ -47,8 +47,14 @@ func TablixSetCell(path, tablixName string, row, col int, value CellValue, dryRu
 func (d *Document) SetTablixCell(tablixName string, row, col int, value CellValue) (string, error) {
 	t := d.findTablix(tablixName)
 	if t == nil {
-		return "", fmt.Errorf("tablix %q not found", tablixName)
+		return "", NewNotFoundError("Tablix", tablixName, d.tablixNames())
 	}
+	normalized, err := normalizeCellValue(value)
+	if err != nil {
+		return "", err
+	}
+	value.Value = normalized
+
 	cell, err := locateCell(t, row, col)
 	if err != nil {
 		return "", err
@@ -69,6 +75,24 @@ func (d *Document) SetTablixCell(tablixName string, row, col int, value CellValu
 	setTextboxValue(textbox, value)
 
 	return fmt.Sprintf("Set cell (%d,%d) in '%s' to %q", row, col, tablixName, value.Value), nil
+}
+
+// normalizeCellValue applies expression semantics to a cell value.
+func normalizeCellValue(cv CellValue) (string, error) {
+	v := cv.Value
+	isExpr := strings.HasPrefix(v, "=")
+	if cv.Expression {
+		if !isExpr {
+			return "=" + v, nil
+		}
+		return v, nil
+	}
+	if isExpr {
+		return "", NewArgInvalidError("value",
+			"value starts with '=' but expression is false",
+			"set expression:true or remove leading '='")
+	}
+	return v, nil
 }
 
 // setTextboxValue ensures the textbox has a single TextRun holding value.
@@ -132,11 +156,19 @@ func setTextboxValue(textbox *xmlquery.Node, value CellValue) {
 func locateCell(t *xmlquery.Node, row, col int) (*xmlquery.Node, error) {
 	rows := xmlquery.Find(t, ".//TablixBody/TablixRows/TablixRow")
 	if row < 0 || row >= len(rows) {
-		return nil, fmt.Errorf("row index %d out of range (have %d rows)", row, len(rows))
+		max := len(rows) - 1
+		if max < 0 {
+			max = 0
+		}
+		return nil, NewIndexError("row", row, 0, max)
 	}
 	cells := xmlquery.Find(rows[row], "TablixCells/TablixCell")
 	if col < 0 || col >= len(cells) {
-		return nil, fmt.Errorf("col index %d out of range (row %d has %d cells)", col, row, len(cells))
+		max := len(cells) - 1
+		if max < 0 {
+			max = 0
+		}
+		return nil, NewIndexError("col", col, 0, max)
 	}
 	return cells[col], nil
 }
@@ -168,7 +200,7 @@ func TablixAddRow(path, tablixName string, row RowSpec, atIndex int, dryRun bool
 func (d *Document) AddTablixRow(tablixName string, spec RowSpec, atIndex int) (string, error) {
 	t := d.findTablix(tablixName)
 	if t == nil {
-		return "", fmt.Errorf("tablix %q not found", tablixName)
+		return "", NewNotFoundError("Tablix", tablixName, d.tablixNames())
 	}
 
 	// Determine target column count from existing rows or columns.
@@ -192,8 +224,9 @@ func (d *Document) AddTablixRow(tablixName string, spec RowSpec, atIndex int) (s
 	// Build the TablixRow XML.
 	cells := spec.Cells
 	if len(cells) == 0 {
-		// empty cells: synthesize placeholders
 		cells = make([]TablixCell, colCount)
+	} else if got := effectiveCellWidth(cells); got != colCount {
+		return "", fmt.Errorf("row cells effective width %d does not match column count %d", got, colCount)
 	}
 	// Build via the same path as Rebuild for consistency.
 	rowSpec := TablixRow{Height: height, Cells: cells}
@@ -283,11 +316,15 @@ func TablixRemoveRow(path, tablixName string, index int, dryRun bool) (string, e
 func (d *Document) RemoveTablixRow(tablixName string, index int) (string, error) {
 	t := d.findTablix(tablixName)
 	if t == nil {
-		return "", fmt.Errorf("tablix %q not found", tablixName)
+		return "", NewNotFoundError("Tablix", tablixName, d.tablixNames())
 	}
 	rows := xmlquery.Find(t, ".//TablixBody/TablixRows/TablixRow")
 	if index < 0 || index >= len(rows) {
-		return "", fmt.Errorf("row index %d out of range (have %d rows)", index, len(rows))
+		max := len(rows) - 1
+		if max < 0 {
+			max = 0
+		}
+		return "", NewIndexError("row", index, 0, max)
 	}
 	xmlquery.RemoveFromTree(rows[index])
 
@@ -321,7 +358,7 @@ func (d *Document) AddTablixColumn(tablixName, width string, atIndex int) (strin
 	}
 	t := d.findTablix(tablixName)
 	if t == nil {
-		return "", fmt.Errorf("tablix %q not found", tablixName)
+		return "", NewNotFoundError("Tablix", tablixName, d.tablixNames())
 	}
 
 	// 1. Insert <TablixColumn> into TablixColumns.
@@ -395,13 +432,17 @@ func TablixRemoveColumn(path, tablixName string, index int, dryRun bool) (string
 func (d *Document) RemoveTablixColumn(tablixName string, index int) (string, error) {
 	t := d.findTablix(tablixName)
 	if t == nil {
-		return "", fmt.Errorf("tablix %q not found", tablixName)
+		return "", NewNotFoundError("Tablix", tablixName, d.tablixNames())
 	}
 
 	// 1. Remove TablixColumn.
 	cols := xmlquery.Find(t, ".//TablixBody/TablixColumns/TablixColumn")
 	if index < 0 || index >= len(cols) {
-		return "", fmt.Errorf("column index %d out of range (have %d columns)", index, len(cols))
+		max := len(cols) - 1
+		if max < 0 {
+			max = 0
+		}
+		return "", NewIndexError("column", index, 0, max)
 	}
 	xmlquery.RemoveFromTree(cols[index])
 
@@ -432,4 +473,17 @@ func readTablixSpec(specPath string) (TablixSpec, error) {
 		return TablixSpec{}, fmt.Errorf("parsing spec JSON: %w", err)
 	}
 	return spec, nil
+}
+
+// effectiveCellWidth sums ColSpan (default 1) across cells in a row.
+func effectiveCellWidth(cells []TablixCell) int {
+	got := 0
+	for _, c := range cells {
+		cs := c.Colspan
+		if cs < 1 {
+			cs = 1
+		}
+		got += cs
+	}
+	return got
 }

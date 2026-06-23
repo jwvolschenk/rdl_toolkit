@@ -46,6 +46,19 @@ type CellStyle struct {
 	BgColor    string `json:"bgColor,omitempty"`
 }
 
+// RebuildTablixFile replaces a Tablix from an in-memory spec.
+func RebuildTablixFile(rdlPath string, spec TablixSpec, dryRun bool) (string, error) {
+	doc, err := Load(rdlPath)
+	if err != nil {
+		return "", err
+	}
+	summary, err := doc.RebuildTablix(spec)
+	if err != nil {
+		return "", err
+	}
+	return maybeSave(doc, rdlPath, summary, dryRun)
+}
+
 // RebuildTablix replaces the named (or first) Tablix with one built from spec.
 // The spec is read from specPath as JSON. File-based wrapper.
 func RebuildTablix(rdlPath, specPath string, dryRun bool) (string, error) {

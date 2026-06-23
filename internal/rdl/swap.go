@@ -6,6 +6,11 @@ import (
 	"github.com/antchfx/xmlquery"
 )
 
+// SwapMacro replaces one string within <ConnectString> elements.
+func SwapMacro(path, old, new string, dryRun bool) (int, error) {
+	return SwapMacros(path, []RenamePair{{Old: old, New: new}}, dryRun)
+}
+
 // SwapMacros replaces strings within <ConnectString> elements.
 // Returns the total number of occurrences replaced.
 func SwapMacros(path string, pairs []RenamePair, dryRun bool) (int, error) {
@@ -18,6 +23,11 @@ func SwapMacros(path string, pairs []RenamePair, dryRun bool) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// SwapField replaces one Fields!X.Value reference within <Value> elements.
+func SwapField(path, old, new string, dryRun bool) (int, error) {
+	return SwapFields(path, []RenamePair{{Old: old, New: new}}, dryRun)
 }
 
 // SwapFields replaces Fields!X.Value references within <Value> elements.

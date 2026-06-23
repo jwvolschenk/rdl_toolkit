@@ -100,21 +100,24 @@ func (d *Document) checkTablixShape(r *ValidationReport) {
 			})
 		}
 
-		// Per-row cell count must equal column count.
-		// Also validate ColSpan placeholder semantics: a cell with ColSpan=N
-		// must be followed by (N-1) empty placeholder cells.
+		// Per-row effective cell width (sum of ColSpan, default 1) must equal column count.
+		// When len(cells)==cols, also validate legacy ColSpan placeholder semantics.
 		rows := xmlquery.Find(body, "TablixRows/TablixRow")
 		for i, row := range rows {
 			cells := xmlquery.Find(row, "TablixCells/TablixCell")
-			if len(cells) != cols {
+			effective := effectiveRowCellWidth(cells)
+			if effective != cols {
 				r.Issues = append(r.Issues, Issue{
 					Severity: SeverityError,
 					XPath:    fmt.Sprintf("%s//TablixBody//TablixRow[%d]", xpath, i),
-					Message: fmt.Sprintf("row %d has %d cells but column count is %d (must match exactly)",
-						i, len(cells), cols),
+					Message: fmt.Sprintf("row %d effective cell width %d does not match column count %d",
+						i, effective, cols),
 				})
 			}
-			// Check ColSpan placeholder cells
+			if len(cells) != cols {
+				continue // no-placeholder colspan layout; skip placeholder check
+			}
+			// Legacy: ColSpan placeholder cells when physical cell count equals column count.
 			for j, c := range cells {
 				cs := child(c, "CellContents")
 				if cs == nil {
@@ -201,13 +204,54 @@ func (d *Document) checkFieldReferences(r *ValidationReport) {
 			}
 			seen[field] = true
 			if !defined[field] {
+				xpath := valueXPath(v)
 				r.Issues = append(r.Issues, Issue{
 					Severity: SeverityError,
+					XPath:    xpath,
 					Message:  fmt.Sprintf("Fields!%s.Value is referenced but not defined in any <Field>", field),
 				})
 			}
 		}
 	}
+}
+
+func valueXPath(v *xmlquery.Node) string {
+	if v == nil {
+		return "//Value"
+	}
+	parts := []string{}
+	for n := v; n != nil; n = n.Parent {
+		if n.Type != xmlquery.ElementNode {
+			continue
+		}
+		if n.Data == "Report" {
+			parts = append([]string{"//Report"}, parts...)
+			break
+		}
+		parts = append([]string{n.Data}, parts...)
+	}
+	if len(parts) == 0 {
+		return "//Value"
+	}
+	return strings.Join(parts, "/")
+}
+
+// effectiveRowCellWidth sums ColSpan from TablixCell nodes (default 1).
+func effectiveRowCellWidth(cells []*xmlquery.Node) int {
+	got := 0
+	for _, c := range cells {
+		cs := 1
+		if cc := child(c, "CellContents"); cc != nil {
+			if col := child(cc, "ColSpan"); col != nil {
+				cs = atoiSafe(strings.TrimSpace(col.InnerText()))
+				if cs < 1 {
+					cs = 1
+				}
+			}
+		}
+		got += cs
+	}
+	return got
 }
 
 // checkDatasetReferences verifies that every <DataSetName> in a Tablix points
