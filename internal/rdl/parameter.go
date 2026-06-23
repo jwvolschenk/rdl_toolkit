@@ -67,10 +67,14 @@ func (d *Document) ManageParameters(ops ParameterOps) string {
 	}
 
 	// After all add/remove operations, validate the grid. If the grid has
-	// fewer cells than total parameters (e.g. hidden params not in grid),
+	// fewer cells than visible parameters (e.g. hidden params not in grid),
 	// remove the entire ReportParametersLayout so Visual Studio regenerates
 	// it. Visual Studio crashes with "Index was out of range" on mismatched grids.
 	d.sanitizeParameterGrid(&b)
+
+	// If the layout was removed (or never existed), auto-generate one for
+	// visible parameters so the report opens in Visual Studio without manual edits.
+	d.ensureParameterLayout(&b)
 
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -174,25 +178,88 @@ func (d *Document) compactParameterGrid() {
 }
 
 // sanitizeParameterGrid checks if the parameter layout grid is consistent
-// with the actual parameters. If the grid has fewer cells than total
-// parameters (e.g. hidden params not in grid), the entire
-// ReportParametersLayout is removed so Visual Studio regenerates it.
+// with the actual parameters. If the grid has fewer cells than VISIBLE
+// parameters, the entire ReportParametersLayout is removed so Visual Studio
+// regenerates it. Hidden parameters don't need grid cells.
 // Visual Studio's SSRS designer crashes with "Index was out of range" when
-// the grid doesn't cover all parameters.
+// the grid doesn't cover all visible parameters.
 func (d *Document) sanitizeParameterGrid(log *strings.Builder) {
 	grid := xmlquery.FindOne(d.root, "//GridLayoutDefinition")
 	if grid == nil {
 		return
 	}
 
-	paramCount := len(xmlquery.Find(d.root, "//ReportParameter"))
+	// Count only visible parameters (hidden ones don't need grid cells).
+	visibleParamCount := 0
+	for _, rp := range xmlquery.Find(d.root, "//ReportParameter") {
+		hn := child(rp, "Hidden")
+		if hn == nil || strings.TrimSpace(hn.InnerText()) != "true" {
+			visibleParamCount++
+		}
+	}
 	cellCount := len(xmlquery.Find(grid, ".//CellDefinition"))
 
-	if cellCount < paramCount {
+	if cellCount < visibleParamCount {
 		layout := xmlquery.FindOne(d.root, "//ReportParametersLayout")
 		if layout != nil {
 			xmlquery.RemoveFromTree(layout)
-			fmt.Fprintf(log, "Removed ReportParametersLayout (had %d cells for %d params — grid would crash VS designer)\n", cellCount, paramCount)
+			fmt.Fprintf(log, "Removed ReportParametersLayout (had %d cells for %d visible params — grid would crash VS designer)\n", cellCount, visibleParamCount)
 		}
 	}
+}
+
+// ensureParameterLayout generates a ReportParametersLayout grid if one is
+// missing and there are visible parameters. Called after all parameter
+// operations to ensure the report opens in Visual Studio.
+func (d *Document) ensureParameterLayout(log *strings.Builder) {
+	// Don't generate if layout already exists.
+	if xmlquery.FindOne(d.root, "//ReportParametersLayout") != nil {
+		return
+	}
+
+	// Collect visible parameters.
+	var visible []string
+	for _, rp := range xmlquery.Find(d.root, "//ReportParameter") {
+		hn := child(rp, "Hidden")
+		if hn == nil || strings.TrimSpace(hn.InnerText()) != "true" {
+			if name := rp.SelectAttr("Name"); name != "" {
+				visible = append(visible, name)
+			}
+		}
+	}
+	if len(visible) == 0 {
+		return
+	}
+
+	// Generate a 2-column grid layout.
+	cols := 2
+	rows := (len(visible) + cols - 1) / cols
+
+	layout := createElement("ReportParametersLayout")
+	grid := createElement("GridLayoutDefinition")
+	xmlquery.AddChild(grid, elementWithText("NumberOfColumns", fmt.Sprintf("%d", cols)))
+	xmlquery.AddChild(grid, elementWithText("NumberOfRows", fmt.Sprintf("%d", rows)))
+
+	cellDefs := createElement("CellDefinitions")
+	for i, name := range visible {
+		cd := createElement("CellDefinition")
+		xmlquery.AddChild(cd, elementWithText("ColumnIndex", fmt.Sprintf("%d", i%cols)))
+		xmlquery.AddChild(cd, elementWithText("RowIndex", fmt.Sprintf("%d", i/cols)))
+		xmlquery.AddChild(cd, elementWithText("ParameterName", name))
+		xmlquery.AddChild(cellDefs, cd)
+	}
+	xmlquery.AddChild(grid, cellDefs)
+	xmlquery.AddChild(layout, grid)
+
+	// Insert after ReportParameters (or before rd:ReportID).
+	reportParams := xmlquery.FindOne(d.root, "//ReportParameters")
+	if reportParams != nil {
+		insertAfter(reportParams, layout)
+	} else {
+		report := d.reportRoot()
+		if report != nil {
+			appendIndented(report, layout, depthOf(report))
+		}
+	}
+	fmt.Fprintf(log, "Generated ReportParametersLayout (%d cols × %d rows for %d visible params)\n", cols, rows, len(visible))
 }
