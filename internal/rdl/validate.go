@@ -99,22 +99,50 @@ func (d *Document) checkTablixShape(r *ValidationReport) {
 			})
 		}
 
-		// Per-row effective width must equal column count.
+		// Per-row cell count must equal column count.
+		// Also validate ColSpan placeholder semantics: a cell with ColSpan=N
+		// must be followed by (N-1) empty placeholder cells.
 		rows := xmlquery.Find(body, "TablixRows/TablixRow")
-		expected := cols
 		for i, row := range rows {
 			cells := xmlquery.Find(row, "TablixCells/TablixCell")
-			effective := 0
-			for _, c := range cells {
-				effective += effectiveCellWidth(c)
-			}
-			if effective != expected {
+			if len(cells) != cols {
 				r.Issues = append(r.Issues, Issue{
 					Severity: SeverityError,
 					XPath:    fmt.Sprintf("%s//TablixBody//TablixRow[%d]", xpath, i),
-					Message: fmt.Sprintf("row %d effective width %d does not match column count %d (check ColSpan values)",
-						i, effective, expected),
+					Message: fmt.Sprintf("row %d has %d cells but column count is %d (must match exactly)",
+						i, len(cells), cols),
 				})
+			}
+			// Check ColSpan placeholder cells
+			for j, c := range cells {
+				cs := child(c, "CellContents")
+				if cs == nil {
+					continue
+				}
+				col := child(cs, "ColSpan")
+				if col == nil {
+					continue
+				}
+				n := atoiSafe(strings.TrimSpace(col.InnerText()))
+				if n <= 1 {
+					continue
+				}
+				expected := n - 1
+				actual := 0
+				for k := j + 1; k < len(cells) && k <= j+expected; k++ {
+					phCC := child(cells[k], "CellContents")
+					if phCC == nil || phCC.FirstChild == nil {
+						actual++
+					}
+				}
+				if actual < expected {
+					r.Issues = append(r.Issues, Issue{
+						Severity: SeverityError,
+						XPath:    fmt.Sprintf("%s//TablixBody//TablixRow[%d]/TablixCell[%d]", xpath, i, j),
+						Message: fmt.Sprintf("ColSpan=%d cell needs %d empty placeholder cells but found %d",
+							n, expected, actual),
+					})
+				}
 			}
 		}
 
@@ -127,20 +155,6 @@ func (d *Document) checkTablixShape(r *ValidationReport) {
 			})
 		}
 	}
-}
-
-// effectiveCellWidth returns the column count consumed by a TablixCell.
-// Reads <ColSpan> if present; defaults to 1.
-func effectiveCellWidth(cell *xmlquery.Node) int {
-	if cs := child(cell, "CellContents"); cs != nil {
-		if col := child(cs, "ColSpan"); col != nil {
-			n := atoiSafe(strings.TrimSpace(col.InnerText()))
-			if n > 0 {
-				return n
-			}
-		}
-	}
-	return 1
 }
 
 // checkFieldReferences finds every Fields!X.Value reference and checks that X
@@ -241,8 +255,9 @@ func (d *Document) checkDataSourceReferences(r *ValidationReport) {
 	}
 }
 
-// checkParameterLayout verifies every ParameterName in ReportParametersLayout
-// points at a defined ReportParameter.
+// checkParameterLayout verifies:
+//  1. Every ParameterName in ReportParametersLayout points at a defined ReportParameter.
+//  2. When ReportParameters exist, ReportParametersLayout must also exist (VS2019+ requirement).
 func (d *Document) checkParameterLayout(r *ValidationReport) {
 	defined := map[string]bool{}
 	for _, p := range xmlquery.Find(d.root, "//ReportParameter") {
@@ -250,6 +265,8 @@ func (d *Document) checkParameterLayout(r *ValidationReport) {
 			defined[name] = true
 		}
 	}
+
+	// Check 1: orphaned layout references
 	for _, ref := range xmlquery.Find(d.root, "//CellDefinition/ParameterName") {
 		name := strings.TrimSpace(ref.InnerText())
 		if name != "" && !defined[name] {
@@ -258,5 +275,15 @@ func (d *Document) checkParameterLayout(r *ValidationReport) {
 				Message:  fmt.Sprintf("ReportParametersLayout references parameter %q which is not defined", name),
 			})
 		}
+	}
+
+	// Check 2: parameters exist but no layout (VS2019+ will refuse to open)
+	if len(defined) > 0 && len(xmlquery.Find(d.root, "//ReportParametersLayout")) == 0 {
+		r.Issues = append(r.Issues, Issue{
+			Severity: SeverityError,
+			Message: fmt.Sprintf(
+				"Report has %d ReportParameter(s) but no ReportParametersLayout — Visual Studio 2019+ requires this element",
+				len(defined)),
+		})
 	}
 }
