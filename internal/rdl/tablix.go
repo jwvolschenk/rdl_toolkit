@@ -139,12 +139,14 @@ func buildTablixXML(spec TablixSpec, name string) string {
 			if cell.Value != "" {
 				b.WriteString(`<Paragraphs><Paragraph><TextRuns><TextRun>`)
 				fmt.Fprintf(&b, `<Value>%s</Value>`, escapeXMLText(cell.Value))
-				if cell.Format != "" {
-					fmt.Fprintf(&b, `<Format>%s</Format>`, escapeXMLText(cell.Format))
-				}
-				if cell.Style != nil && hasTextRunStyle(cell.Style) {
+				if cell.Format != "" || hasTextRunStyle(cell.Style) {
 					b.WriteString(`<Style>`)
-					writeTextRunStyle(&b, cell.Style)
+					if cell.Format != "" {
+						fmt.Fprintf(&b, `<Format>%s</Format>`, escapeXMLText(cell.Format))
+					}
+					if cell.Style != nil {
+						writeTextRunStyle(&b, cell.Style)
+					}
 					b.WriteString(`</Style>`)
 				}
 				b.WriteString(`</TextRun></TextRuns>`)
