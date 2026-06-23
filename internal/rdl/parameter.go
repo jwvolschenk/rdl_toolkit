@@ -66,6 +66,12 @@ func (d *Document) ManageParameters(ops ParameterOps) string {
 		fmt.Fprintf(&b, "Added parameter '%s' (type=%s)\n", a.Name, a.Type)
 	}
 
+	// After all add/remove operations, validate the grid. If the grid has
+	// fewer cells than total parameters (e.g. hidden params not in grid),
+	// remove the entire ReportParametersLayout so Visual Studio regenerates
+	// it. Visual Studio crashes with "Index was out of range" on mismatched grids.
+	d.sanitizeParameterGrid(&b)
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -164,5 +170,29 @@ func (d *Document) compactParameterGrid() {
 	nr := xmlquery.FindOne(grid, ".//NumberOfRows")
 	if nr != nil {
 		setNodeText(nr, fmt.Sprintf("%d", len(oldRows)))
+	}
+}
+
+// sanitizeParameterGrid checks if the parameter layout grid is consistent
+// with the actual parameters. If the grid has fewer cells than total
+// parameters (e.g. hidden params not in grid), the entire
+// ReportParametersLayout is removed so Visual Studio regenerates it.
+// Visual Studio's SSRS designer crashes with "Index was out of range" when
+// the grid doesn't cover all parameters.
+func (d *Document) sanitizeParameterGrid(log *strings.Builder) {
+	grid := xmlquery.FindOne(d.root, "//GridLayoutDefinition")
+	if grid == nil {
+		return
+	}
+
+	paramCount := len(xmlquery.Find(d.root, "//ReportParameter"))
+	cellCount := len(xmlquery.Find(grid, ".//CellDefinition"))
+
+	if cellCount < paramCount {
+		layout := xmlquery.FindOne(d.root, "//ReportParametersLayout")
+		if layout != nil {
+			xmlquery.RemoveFromTree(layout)
+			fmt.Fprintf(log, "Removed ReportParametersLayout (had %d cells for %d params — grid would crash VS designer)\n", cellCount, paramCount)
+		}
 	}
 }
