@@ -237,16 +237,20 @@ func valueXPath(v *xmlquery.Node) string {
 }
 
 // effectiveRowCellWidth sums ColSpan from TablixCell nodes (default 1).
+// Placeholder cells (no CellContents) contribute 0 to the width.
 func effectiveRowCellWidth(cells []*xmlquery.Node) int {
 	got := 0
 	for _, c := range cells {
+		cc := child(c, "CellContents")
+		if cc == nil {
+			// Empty placeholder cell — contributes 0 to effective width.
+			continue
+		}
 		cs := 1
-		if cc := child(c, "CellContents"); cc != nil {
-			if col := child(cc, "ColSpan"); col != nil {
-				cs = atoiSafe(strings.TrimSpace(col.InnerText()))
-				if cs < 1 {
-					cs = 1
-				}
+		if col := child(cc, "ColSpan"); col != nil {
+			cs = atoiSafe(strings.TrimSpace(col.InnerText()))
+			if cs < 1 {
+				cs = 1
 			}
 		}
 		got += cs

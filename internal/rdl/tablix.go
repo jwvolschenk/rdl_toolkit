@@ -119,7 +119,13 @@ func (d *Document) RebuildTablix(spec TablixSpec) (string, error) {
 
 	totalCells := 0
 	for _, r := range spec.Rows {
-		totalCells += len(r.Cells)
+		for _, c := range r.Cells {
+			if c.Colspan > 1 {
+				totalCells += c.Colspan // includes placeholder cells
+			} else {
+				totalCells++
+			}
+		}
 	}
 	return fmt.Sprintf("Rebuilt Tablix '%s': %d columns, %d rows, %d cells",
 		preserveName, len(spec.Columns), len(spec.Rows), totalCells), nil
@@ -127,7 +133,8 @@ func (d *Document) RebuildTablix(spec TablixSpec) (string, error) {
 
 // buildTablixXML returns the XML string for a Tablix element matching spec.
 // Every row gets a static <TablixMember /> (no groups). Cell-level ColSpan
-// is emitted as <ColSpan>N</ColSpan> inside CellContents — no placeholder cells.
+// is emitted as <ColSpan>N</ColSpan> inside CellContents, followed by (N-1)
+// empty <TablixCell /> placeholder cells (required by VS2022).
 func buildTablixXML(spec TablixSpec, name string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<Tablix Name=%q>`, name)
@@ -155,6 +162,10 @@ func buildTablixXML(spec TablixSpec, name string) string {
 				fmt.Fprintf(&b, `<ColSpan>%d</ColSpan>`, cell.Colspan)
 			}
 			b.WriteString(`</CellContents></TablixCell>`)
+			// Add empty placeholder cells for ColSpan (required by VS2022).
+			for i := 1; i < cell.Colspan; i++ {
+				b.WriteString(`<TablixCell />`)
+			}
 		}
 		b.WriteString(`</TablixCells></TablixRow>`)
 	}
