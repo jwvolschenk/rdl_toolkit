@@ -15,10 +15,31 @@ A Go CLI tool and MCP server for manipulating SSRS RDL (Report Definition Langua
 
 ## Installation
 
+**Quick install (from GitHub Releases):**
+
 ```bash
-go build -o bin/rdl-tool ./cmd/rdl-tool
+curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.sh | bash
+```
+
+With agent registration instructions:
+
+```bash
+bash scripts/setup-rdl-tool.sh --agent Hermes
+# Available agents: Hermes, Copilot, Claude, Codex, Gemini, Cursor, OpenCode
+```
+
+**Build from source:**
+
+```bash
+bash scripts/build-rdl-tool.sh
 # or
-go install ./cmd/rdl-tool
+go build -o bin/rdl-tool ./cmd/rdl-tool
+```
+
+**Cross-platform build:**
+
+```bash
+make build-all
 ```
 
 ## CLI Usage
