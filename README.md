@@ -18,7 +18,7 @@ A Go CLI tool and MCP server for manipulating SSRS RDL (Report Definition Langua
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/master/scripts/setup-rdl-tool.sh | bash
 ```
 
 The installer downloads the correct binary for your platform, verifies the checksum, and prompts you to select your AI agent for MCP configuration.
@@ -32,7 +32,7 @@ bash scripts/setup-rdl-tool.sh --agent Copilot
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.ps1 | iex
+irm https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/master/scripts/setup-rdl-tool.ps1 | iex
 ```
 
 Or download and run manually:

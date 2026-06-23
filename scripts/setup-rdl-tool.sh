@@ -5,7 +5,7 @@
 #   linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/master/scripts/setup-rdl-tool.sh | bash
 #   bash scripts/setup-rdl-tool.sh
 #   bash scripts/setup-rdl-tool.sh --agent Hermes
 #   RDL_TOOL_VERSION=v1.0.0 bash scripts/setup-rdl-tool.sh
@@ -40,7 +40,7 @@ detect_platform() {
             printf "  ${Y}Windows detected.${N} Use the PowerShell installer instead:\n\n"
             printf "    ${C}powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1${N}\n\n"
             printf "  ${D}Or from a PowerShell terminal:${N}\n"
-            printf "    ${C}irm https://raw.githubusercontent.com/${FORK_REPO}/main/scripts/setup-rdl-tool.ps1 | iex${N}\n\n"
+            printf "    ${C}irm https://raw.githubusercontent.com/${FORK_REPO}/master/scripts/setup-rdl-tool.ps1 | iex${N}\n\n"
             exit 0
             ;;
         *) die "Unsupported OS: $os" ;;

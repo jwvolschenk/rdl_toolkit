@@ -301,7 +301,7 @@ main() {
     # 10. Done
     echo ""
     printf "  ${G}Done!${N} Release ${tag} published.\n"
-    printf "  ${D}Install: curl -fsSL https://raw.githubusercontent.com/${FORK_REPO}/main/scripts/setup-rdl-tool.sh | bash${N}\n"
+    printf "  ${D}Install: curl -fsSL https://raw.githubusercontent.com/${FORK_REPO}/master/scripts/setup-rdl-tool.sh | bash${N}\n"
     echo ""
 }
 

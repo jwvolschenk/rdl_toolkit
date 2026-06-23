@@ -4,7 +4,7 @@
 # Defaults to Copilot agent registration.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/main/scripts/setup-rdl-tool.ps1 | iex
+#   irm https://raw.githubusercontent.com/jwvolschenk/rdl_toolkit/master/scripts/setup-rdl-tool.ps1 | iex
 #   powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1 -Agent Hermes
 #   powershell -ExecutionPolicy Bypass -File scripts/setup-rdl-tool.ps1 -Agent Copilot -Version v1.0.0
