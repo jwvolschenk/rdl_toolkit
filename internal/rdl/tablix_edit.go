@@ -95,9 +95,21 @@ func setTextboxValue(textbox *xmlquery.Node, value CellValue) {
 		xmlquery.AddChild(textruns, textrun)
 	}
 	// Replace existing Value/Format with the new ones.
-	for _, name := range []string{"Value", "Format"} {
+	// Remove Value (direct child) and Format (may be direct child or inside Style).
+	for {
+		c := child(textrun, "Value")
+		if c == nil {
+			break
+		}
+		xmlquery.RemoveFromTree(c)
+	}
+	// Remove Format from direct children AND from inside Style.
+	for _, loc := range []*xmlquery.Node{textrun, child(textrun, "Style")} {
+		if loc == nil {
+			continue
+		}
 		for {
-			c := child(textrun, name)
+			c := child(loc, "Format")
 			if c == nil {
 				break
 			}
@@ -106,7 +118,13 @@ func setTextboxValue(textbox *xmlquery.Node, value CellValue) {
 	}
 	xmlquery.AddChild(textrun, elementWithText("Value", value.Value))
 	if value.Format != "" {
-		xmlquery.AddChild(textrun, elementWithText("Format", value.Format))
+		// Place Format inside Style (RDL schema requirement).
+		style := child(textrun, "Style")
+		if style == nil {
+			style = createElement("Style")
+			xmlquery.AddChild(textrun, style)
+		}
+		xmlquery.AddChild(style, elementWithText("Format", value.Format))
 	}
 }
 
