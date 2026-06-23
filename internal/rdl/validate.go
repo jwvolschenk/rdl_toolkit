@@ -51,6 +51,7 @@ func (d *Document) Validate() *ValidationReport {
 	r := &ValidationReport{Issues: []Issue{}}
 
 	d.checkTablixShape(r)
+	d.checkTextboxStructure(r)
 	d.checkFieldReferences(r)
 	d.checkDatasetReferences(r)
 	d.checkDataSourceReferences(r)
@@ -154,6 +155,28 @@ func (d *Document) checkTablixShape(r *ValidationReport) {
 				Message: fmt.Sprintf("TablixRowHierarchy member count (%d) does not match TablixRows count (%d)", hierRows, len(rows)),
 			})
 		}
+	}
+}
+
+// checkTextboxStructure verifies every Textbox has the mandatory Paragraphs
+// child. Visual Studio rejects empty Textbox shells at design time.
+func (d *Document) checkTextboxStructure(r *ValidationReport) {
+	for _, tb := range xmlquery.Find(d.root, "//Textbox") {
+		if child(tb, "Paragraphs") != nil {
+			continue
+		}
+		name := tb.SelectAttr("Name")
+		xpath := "//Textbox"
+		if name != "" {
+			xpath = fmt.Sprintf("//Textbox[@Name=%q]", name)
+		}
+		r.Issues = append(r.Issues, Issue{
+			Severity: SeverityError,
+			XPath:    xpath,
+			Message: fmt.Sprintf(
+				"Textbox %q is missing mandatory <Paragraphs> element (Visual Studio will refuse to open the report)",
+				name),
+		})
 	}
 }
 

@@ -250,10 +250,7 @@ func buildTablixRowXML(row TablixRow, tablixName string) string {
 		}
 		b.WriteString(`<TablixCell><CellContents>`)
 		fmt.Fprintf(&b, `<Textbox Name=%q>`, tbName)
-		if cell.Value != "" {
-			fmt.Fprintf(&b, `<Paragraphs><Paragraph><TextRuns><TextRun><Value>%s</Value></TextRun></TextRuns></Paragraph></Paragraphs>`,
-				escapeXMLText(cell.Value))
-		}
+		writeTextboxBody(&b, cell)
 		b.WriteString(`</Textbox>`)
 		if cell.Colspan > 1 {
 			fmt.Fprintf(&b, `<ColSpan>%d</ColSpan>`, cell.Colspan)
@@ -353,7 +350,9 @@ func (d *Document) AddTablixColumn(tablixName, width string, atIndex int) (strin
 		}
 		newCell := createElement("TablixCell")
 		cc := createElement("CellContents")
-		xmlquery.AddChild(cc, createElement("Textbox", [2]string{"Name", fmt.Sprintf("%s_Col%d_Row%d", tablixName, idx, ri)}))
+		textbox := createElement("Textbox", [2]string{"Name", fmt.Sprintf("%s_Col%d_Row%d", tablixName, idx, ri)})
+		setTextboxValue(textbox, CellValue{Value: ""})
+		xmlquery.AddChild(cc, textbox)
 		xmlquery.AddChild(newCell, cc)
 
 		existingCells := xmlquery.Find(cellsContainer, "TablixCell")

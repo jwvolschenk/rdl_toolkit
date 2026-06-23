@@ -112,6 +112,24 @@ func TestValidate_ParameterLayoutOrphan(t *testing.T) {
 	expectIssue(t, r, "\"StartDate\"")
 }
 
+// TestValidate_TextboxMissingParagraphs flags bare Textbox shells that Visual
+// Studio cannot deserialize.
+func TestValidate_TextboxMissingParagraphs(t *testing.T) {
+	doc := mustLoad(t)
+	tb := xmlquery.FindOne(doc.Root(), "//Tablix//Textbox")
+	if tb == nil {
+		t.Fatal("fixture missing tablix textbox")
+	}
+	paragraphs := child(tb, "Paragraphs")
+	if paragraphs == nil {
+		t.Fatal("fixture textbox already missing Paragraphs")
+	}
+	xmlquery.RemoveFromTree(paragraphs)
+
+	r := doc.Validate()
+	expectIssue(t, r, "missing mandatory <Paragraphs>")
+}
+
 // TestValidate_MalformedXML is a top-level test: Validate(path) should return
 // a non-nil error when the file is not well-formed XML.
 func TestValidate_MalformedXML(t *testing.T) {

@@ -1,6 +1,7 @@
 package rdl
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,40 @@ func TestRebuildTablix_Basic(t *testing.T) {
 	}
 	if tab.Rows[0].Cells[0].Value != "A" {
 		t.Errorf("cell (0,0) value = %q, want 'A'", tab.Rows[0].Cells[0].Value)
+	}
+}
+
+func TestRebuildTablix_EmptyCellHasParagraphs(t *testing.T) {
+	doc := mustLoad(t)
+	name := tablixNameOfFirst(t, doc)
+	spec := TablixSpec{
+		Name:    name,
+		Columns: []float64{5.0, 3.0},
+		Rows: []TablixRow{
+			{Height: "0.5cm", Cells: []TablixCell{
+				{Textbox: "Title", Value: "Portfolio Analysis"},
+				{Value: ""},
+			}},
+		},
+	}
+	if _, err := doc.RebuildTablix(spec); err != nil {
+		t.Fatalf("RebuildTablix: %v", err)
+	}
+
+	re := reloadSaved(t, doc)
+	tab := xmlquery.FindOne(re.Root(), `//Tablix[@Name="`+name+`"]`)
+	if tab == nil {
+		t.Fatal("rebuilt tablix not found")
+	}
+	for _, tb := range xmlquery.Find(tab, ".//Textbox") {
+		if child(tb, "Paragraphs") == nil {
+			t.Errorf("textbox %q missing Paragraphs after rebuild", tb.SelectAttr("Name"))
+		}
+	}
+
+	r := re.Validate()
+	if !r.Pass {
+		t.Errorf("validation failed after rebuild with empty cell: %+v", r.Issues)
 	}
 }
 
@@ -224,6 +259,11 @@ func TestAddTablixColumn_Append(t *testing.T) {
 	for i, r := range tab.Rows {
 		if len(r.Cells) != origCols+1 {
 			t.Errorf("row %d has %d cells, want %d", i, len(r.Cells), origCols+1)
+		}
+	}
+	for _, tb := range xmlquery.Find(re.Root(), fmt.Sprintf(`//Tablix[@Name=%q]//Textbox`, name)) {
+		if child(tb, "Paragraphs") == nil {
+			t.Errorf("textbox %q missing Paragraphs after AddTablixColumn", tb.SelectAttr("Name"))
 		}
 	}
 }

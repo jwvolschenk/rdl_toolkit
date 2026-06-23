@@ -136,28 +136,7 @@ func buildTablixXML(spec TablixSpec, name string) string {
 				tbName = name + "_Cell"
 			}
 			fmt.Fprintf(&b, `<Textbox Name=%q>`, tbName)
-			if cell.Value != "" {
-				b.WriteString(`<Paragraphs><Paragraph><TextRuns><TextRun>`)
-				fmt.Fprintf(&b, `<Value>%s</Value>`, escapeXMLText(cell.Value))
-				if cell.Format != "" || hasTextRunStyle(cell.Style) {
-					b.WriteString(`<Style>`)
-					if cell.Format != "" {
-						fmt.Fprintf(&b, `<Format>%s</Format>`, escapeXMLText(cell.Format))
-					}
-					if cell.Style != nil {
-						writeTextRunStyle(&b, cell.Style)
-					}
-					b.WriteString(`</Style>`)
-				}
-				b.WriteString(`</TextRun></TextRuns>`)
-				if cell.Style != nil && cell.Style.TextAlign != "" {
-					fmt.Fprintf(&b, `<Style><TextAlign>%s</TextAlign></Style>`, cell.Style.TextAlign)
-				}
-				b.WriteString(`</Paragraph></Paragraphs>`)
-			}
-			if cell.Style != nil && cell.Style.BgColor != "" {
-				fmt.Fprintf(&b, `<Style><BackgroundColor>%s</BackgroundColor></Style>`, cell.Style.BgColor)
-			}
+			writeTextboxBody(&b, cell)
 			b.WriteString(`</Textbox>`)
 			if cell.Colspan > 1 {
 				fmt.Fprintf(&b, `<ColSpan>%d</ColSpan>`, cell.Colspan)
@@ -188,6 +167,32 @@ func buildTablixXML(spec TablixSpec, name string) string {
 	}
 	b.WriteString(`</Tablix>`)
 	return b.String()
+}
+
+// writeTextboxBody writes the mandatory Paragraphs subtree and optional
+// textbox-level Style. SSRS requires every Textbox to contain Paragraphs,
+// even when the cell value is empty.
+func writeTextboxBody(b *strings.Builder, cell TablixCell) {
+	b.WriteString(`<Paragraphs><Paragraph><TextRuns><TextRun>`)
+	fmt.Fprintf(b, `<Value>%s</Value>`, escapeXMLText(cell.Value))
+	if cell.Format != "" || hasTextRunStyle(cell.Style) {
+		b.WriteString(`<Style>`)
+		if cell.Format != "" {
+			fmt.Fprintf(b, `<Format>%s</Format>`, escapeXMLText(cell.Format))
+		}
+		if cell.Style != nil {
+			writeTextRunStyle(b, cell.Style)
+		}
+		b.WriteString(`</Style>`)
+	}
+	b.WriteString(`</TextRun></TextRuns>`)
+	if cell.Style != nil && cell.Style.TextAlign != "" {
+		fmt.Fprintf(b, `<Style><TextAlign>%s</TextAlign></Style>`, cell.Style.TextAlign)
+	}
+	b.WriteString(`</Paragraph></Paragraphs>`)
+	if cell.Style != nil && cell.Style.BgColor != "" {
+		fmt.Fprintf(b, `<Style><BackgroundColor>%s</BackgroundColor></Style>`, cell.Style.BgColor)
+	}
 }
 
 func hasTextRunStyle(s *CellStyle) bool {
